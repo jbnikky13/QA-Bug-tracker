@@ -22,7 +22,6 @@ if uploaded_zip:
     if upload_dir.exists():
         shutil.rmtree(upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
-
     try:
         with zipfile.ZipFile(uploaded_zip) as z:
             # Prevent path traversal when extracting ZIP files.
@@ -32,7 +31,6 @@ if uploaded_zip:
                 if not str(destination).startswith(str(base)):
                     raise ValueError("Unsafe ZIP path detected.")
             z.extractall(upload_dir)
-
         file_count = sum(1 for p in upload_dir.rglob("*") if p.is_file())
         st.success(f"ZIP uploaded successfully — {file_count} project files extracted.")
         st.session_state["uploaded_project"] = str(upload_dir)
@@ -42,10 +40,34 @@ if uploaded_zip:
 with st.sidebar:
     st.header("Test settings")
     target = st.text_input("Website / web-app URL", placeholder="https://example.com")
-    max_pages = st.slider("Maximum pages", 1, 50, 10)
+
+    st.markdown("---")
+    st.subheader("📋 Paste multiple links")
+    bulk_urls = st.text_area(
+        "One URL per line",
+        placeholder="https://example.com/page1\nhttps://example.com/page2\nhttps://another-site.com",
+        height=120,
+    )
+    bulk_start = st.button("🚀 Scan all pasted links", use_container_width=True)
+
+    st.markdown("---")
+    max_pages = st.slider("Maximum pages (single-URL crawl)", 1, 50, 10)
     test_mobile = st.checkbox("Test mobile viewport", True)
-    include_accessibility = st.checkbox("Basic accessibility checks", True)
+    include_accessibility = st.checkbox("Basic + axe-core accessibility checks", True)
     start = st.button("🚀 Start scan", type="primary", use_container_width=True)
+
+
+def _parse_bulk_urls(raw: str) -> list:
+    urls = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if not line.startswith(("http://", "https://")):
+            line = "https://" + line
+        urls.append(line)
+    return urls
+
 
 if start:
     if not target.startswith(("http://", "https://")):
@@ -61,10 +83,49 @@ if start:
         )
     st.session_state["result"] = result
 
+if bulk_start:
+    urls = _parse_bulk_urls(bulk_urls)
+    if not urls:
+        st.error("Paste at least one valid URL, one per line.")
+        st.stop()
+
+    combined = {"target": f"{len(urls)} pasted links", "pages": [], "bugs": [], "passed": 0}
+
+    progress = st.progress(0, text="Starting scan...")
+    for i, url in enumerate(urls):
+        progress.progress(i / len(urls), text=f"Scanning {url} ...")
+        try:
+            r = run_scan(
+                url,
+                max_pages=1,              # each pasted link is scanned individually, no crawl
+                test_mobile=test_mobile,
+                include_accessibility=include_accessibility,
+                project_dir=None,
+            )
+            combined["pages"].extend(r["pages"])
+            combined["bugs"].extend(r["bugs"])
+            combined["passed"] += r["passed"]
+        except Exception as e:
+            combined["bugs"].append({
+                "severity": "High",
+                "type": "Scan failure",
+                "page": url,
+                "message": str(e),
+                "evidence": "run_scan",
+            })
+    progress.progress(1.0, text="Done")
+
+    # Re-number bug IDs so they're unique across the merged set
+    for idx, b in enumerate(combined["bugs"]):
+        b["id"] = f"BUG-{idx+1:03d}"
+
+    st.session_state["result"] = combined
+
 result = st.session_state.get("result")
 if result:
     bugs = result["bugs"]
     pages = result["pages"]
+
     c1,c2,c3,c4 = st.columns(4)
     c1.metric("Pages tested", len(pages))
     c2.metric("Issues", len(bugs))
@@ -94,6 +155,6 @@ if result:
     docx = make_docx(result, tmp / "qa_report.docx")
     with open(pdf, "rb") as f: st.download_button("📄 Download PDF", f, "qa_report.pdf", "application/pdf")
     with open(docx, "rb") as f: st.download_button("📝 Download DOCX", f, "qa_report.docx",
-                                                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 else:
-    st.info("Enter a website URL and start a scan.")
+    st.info("Enter a website URL and start a scan, or paste multiple links above.")
