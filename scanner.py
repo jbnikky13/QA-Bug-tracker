@@ -48,6 +48,15 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
 
             try:
                 response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                # domcontentloaded fires before JS-heavy frameworks (React/Angular/etc.)
+                # finish painting, which is what left screenshots blank. Give the page a
+                # chance to settle; don't hard-fail the whole scan if it never goes idle
+                # (some sites keep long-poll/analytics connections open forever).
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
+                await page.wait_for_timeout(1000)
                 status = response.status if response else 0
                 pages.append({"url": url, "status": status})
 
