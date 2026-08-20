@@ -30,9 +30,21 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
                 pass
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
         context = await browser.new_context(
-            viewport={"width": 390, "height": 844} if test_mobile else {"width": 1280, "height": 800}
+            viewport={"width": 390, "height": 844} if test_mobile else {"width": 1280, "height": 800},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+        )
+        # Some sites detect the automation flag and serve reduced or blank content
+        # to headless browsers. Hiding it isn't foolproof but fixes the common case.
+        await context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
 
         while queue and len(seen) < max_pages:
@@ -206,6 +218,28 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
                             passed += 1
                     except Exception as e:
                         bugs.append(_bug("Low", "Accessibility scan failed", url, str(e), "axe-core"))
+
+                # Scroll to the bottom and back to trigger any lazy-loaded/scroll-in
+                # content, then let animations/transitions settle before capturing.
+                try:
+                    await page.evaluate("""
+                    async () => {
+                        const distance = 400;
+                        const delay = 120;
+                        let total = 0;
+                        const height = document.body.scrollHeight;
+                        while (total < height) {
+                            window.scrollBy(0, distance);
+                            total += distance;
+                            await new Promise(r => setTimeout(r, delay));
+                        }
+                        window.scrollTo(0, 0);
+                    }
+                    """)
+                except Exception:
+                    pass
+                await page.add_style_tag(content="*, *::before, *::after { animation: none !important; transition: none !important; }")
+                await page.wait_for_timeout(500)
 
                 shot = shots / f"page_{len(pages):03d}.png"
                 await page.screenshot(path=str(shot), full_page=True)

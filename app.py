@@ -71,7 +71,7 @@ with st.sidebar:
     bulk_start = st.button("🚀 Scan all pasted links", use_container_width=True)
 
     st.markdown("---")
-    max_pages = st.slider("Maximum pages (single-URL crawl)", 1, 50, 10)
+    max_pages = st.slider("Maximum pages to crawl per site", 1, 50, 10, help="Applies to both the single-URL scan and each pasted link — each site is crawled up to this many pages.")
     test_mobile = st.checkbox("Test mobile viewport", True)
     include_accessibility = st.checkbox("Basic + axe-core accessibility checks", True)
     start = st.button("🚀 Start scan", type="primary", use_container_width=True)
@@ -117,7 +117,7 @@ if bulk_start:
         try:
             r = run_scan(
                 url,
-                max_pages=1,              # each pasted link is scanned individually, no crawl
+                max_pages=max_pages,       # each pasted link now crawls its own site, same depth as a single-URL scan
                 test_mobile=test_mobile,
                 include_accessibility=include_accessibility,
                 project_dir=None,
