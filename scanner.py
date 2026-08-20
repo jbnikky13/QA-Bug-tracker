@@ -1,9 +1,11 @@
 import asyncio, re, tempfile
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 
 AXE_CORE_CDN = "https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.9.1/axe.min.js"
+
+SEVERITY_TO_PRIORITY = {"Critical": "P1", "High": "P1", "Medium": "P2", "Low": "P3"}
 
 
 async def _scan(target, max_pages, test_mobile, include_accessibility, project_dir=None):
@@ -12,7 +14,6 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
     passed = 0
     shots = Path(tempfile.mkdtemp(prefix="qa_shots_"))
 
-    # Basic static project inspection when a ZIP was supplied.
     if project_dir:
         project = Path(project_dir)
         source_files = [p for p in project.rglob("*")
@@ -21,12 +22,10 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
             try:
                 data = src.read_text(errors="ignore")
                 if re.search(r"console\.error\s*\(", data):
-                    bugs.append({
-                        "severity": "Low", "type": "Static source warning",
-                        "page": str(src.relative_to(project)),
-                        "message": "Source contains console.error().",
-                        "evidence": "Static project inspection"
-                    })
+                    bugs.append(_bug(
+                        "Low", "Static source warning", str(src.relative_to(project)),
+                        "Source contains console.error().", "Static project inspection"
+                    ))
             except Exception:
                 pass
 
@@ -42,9 +41,6 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
                 continue
             seen.add(url)
 
-            # A fresh page per URL keeps console/network listeners scoped to
-            # this page only, so errors from a previous page can't leak into
-            # this page's results.
             page = await context.new_page()
             console_errors, failed_requests = [], []
             page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
@@ -56,50 +52,72 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
                 pages.append({"url": url, "status": status})
 
                 if status >= 400:
-                    bugs.append({"severity": "High" if status >= 500 else "Medium", "type": "HTTP error",
-                                 "page": url, "message": f"Page returned HTTP {status}", "evidence": str(status)})
+                    bugs.append(_bug(
+                        "High" if status >= 500 else "Medium", "HTTP error", url,
+                        f"Page returned HTTP {status}.",
+                        f"HTTP status code {status}",
+                        steps=f"1. Navigate to {url}.\n2. Observe the server response status.",
+                        expected="Page should return HTTP 200.",
+                        actual=f"Page returned HTTP {status}."
+                    ))
                 else:
                     passed += 1
 
-                # Broken links
                 links = await page.locator("a[href]").evaluate_all(
                     "(els) => els.map(e => e.href).filter(Boolean)")
                 for href in links:
                     if href.startswith(root) and href not in seen and href not in queue:
                         queue.append(href.split("#")[0])
 
-                # Images/resources
                 imgs = await page.locator("img[src]").evaluate_all("(els) => els.map(e => e.src)")
                 for src in imgs:
                     try:
                         r = await context.request.get(src, timeout=10000)
                         if r.status >= 400:
-                            bugs.append({"severity": "Medium", "type": "Broken image", "page": url,
-                                         "message": f"{src} returned HTTP {r.status}", "evidence": src})
+                            bugs.append(_bug(
+                                "Medium", "Broken image", url,
+                                f"Image failed to load: {src} returned HTTP {r.status}.", src,
+                                steps=f"1. Navigate to {url}.\n2. Locate <img src=\"{src}\">.\n3. Observe it fails to load.",
+                                expected="Image should load with HTTP 200.",
+                                actual=f"Image returned HTTP {r.status}."
+                            ))
                     except Exception as e:
-                        bugs.append({"severity": "Medium", "type": "Image request failed", "page": url,
-                                     "message": str(e), "evidence": src})
+                        bugs.append(_bug(
+                            "Medium", "Image request failed", url, str(e), src
+                        ))
 
                 for err in console_errors[:10]:
-                    bugs.append({"severity": "High", "type": "JavaScript console error", "page": url,
-                                 "message": err, "evidence": "Browser console"})
+                    bugs.append(_bug(
+                        "High", "JavaScript console error", url, err, "Browser console",
+                        steps=f"1. Open {url} in a browser with dev tools open.\n2. Check the Console tab.",
+                        expected="No errors logged to console.",
+                        actual=err
+                    ))
                 for err in failed_requests[:10]:
-                    bugs.append({"severity": "High", "type": "Failed network request", "page": url,
-                                 "message": err, "evidence": "Playwright requestfailed"})
+                    bugs.append(_bug(
+                        "High", "Failed network request", url, err, "Playwright requestfailed",
+                        steps=f"1. Open {url} in a browser with dev tools open.\n2. Check the Network tab for failed requests.",
+                        expected="All network requests succeed.",
+                        actual=err
+                    ))
 
                 title = await page.title()
                 if not title.strip():
-                    bugs.append({"severity": "Low", "type": "Missing page title", "page": url,
-                                 "message": "The page has no document title.", "evidence": "<title> missing/empty"})
+                    bugs.append(_bug(
+                        "Low", "Missing page title", url, "The page has no document title.",
+                        "<title> missing/empty",
+                        steps=f"1. View page source of {url}.\n2. Inspect the <title> element.",
+                        expected="Page should have a descriptive, non-empty <title>.",
+                        actual="Title is missing or empty."
+                    ))
                 else:
                     passed += 1
 
-                # --- Layout / visual issues (heuristic, in-browser) ---
                 layout_issues = await page.evaluate("""
                 () => {
                     const issues = [];
                     if (document.documentElement.scrollWidth > window.innerWidth + 5) {
-                        issues.push('Horizontal overflow: page content is wider than the viewport.');
+                        issues.push({msg: 'Horizontal overflow: page content is wider than the viewport.', sel: 'html'});
                     }
                     document.querySelectorAll('*').forEach(el => {
                         const style = getComputedStyle(el);
@@ -108,69 +126,93 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
                             rect.width === 0 && rect.height === 0 &&
                             el.textContent.trim().length > 0 &&
                             el.children.length === 0) {
-                            issues.push('Zero-size element with text content: "' +
-                                el.textContent.trim().slice(0, 60) + '"');
+                            issues.push({
+                                msg: 'Zero-size element with text content: "' + el.textContent.trim().slice(0, 60) + '"',
+                                sel: el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')
+                            });
                         }
                         if ((rect.left < -50 || rect.top < -50)) {
                             const tag = el.tagName.toLowerCase();
                             if (['img','button','a','input'].includes(tag)) {
-                                issues.push('Interactive/media element rendered off-screen: <' + tag + '>');
+                                issues.push({
+                                    msg: 'Interactive/media element rendered off-screen: <' + tag + '>',
+                                    sel: tag + (el.id ? '#' + el.id : '')
+                                });
                             }
                         }
                     });
-                    return [...new Set(issues)].slice(0, 15);
+                    const seenMsgs = new Set(); const out = [];
+                    for (const i of issues) { if (!seenMsgs.has(i.msg)) { seenMsgs.add(i.msg); out.push(i); } }
+                    return out.slice(0, 15);
                 }
                 """)
                 for issue in layout_issues:
-                    bugs.append({"severity": "Medium", "type": "Layout issue", "page": url,
-                                 "message": issue, "evidence": "In-browser layout check"})
+                    bugs.append(_bug(
+                        "Medium", "Layout issue", url, issue["msg"], issue["sel"],
+                        steps=f"1. Open {url} at the tested viewport.\n2. Inspect element `{issue['sel']}`.",
+                        expected="Element renders fully within the viewport.",
+                        actual=issue["msg"]
+                    ))
                 if not layout_issues:
                     passed += 1
 
                 if include_accessibility:
                     images_without_alt = await page.locator("img:not([alt])").count()
                     if images_without_alt:
-                        bugs.append({"severity": "Low", "type": "Accessibility", "page": url,
-                                     "message": f"{images_without_alt} image(s) have no alt attribute.",
-                                     "evidence": "img:not([alt])"})
+                        bugs.append(_bug(
+                            "Low", "Accessibility", url,
+                            f"{images_without_alt} image(s) have no alt attribute.", "img:not([alt])",
+                            wcag="WCAG 1.1.1 (Non-text Content)",
+                            steps=f"1. Open {url}.\n2. Inspect <img> elements for a missing alt attribute.",
+                            expected="All meaningful images have descriptive alt text.",
+                            actual=f"{images_without_alt} image(s) missing alt text."
+                        ))
                     else:
                         passed += 1
 
-                    # Deeper accessibility scan via axe-core (contrast, labels,
-                    # heading order, ARIA misuse, etc.)
                     try:
                         await page.add_script_tag(url=AXE_CORE_CDN)
                         axe_results = await page.evaluate("async () => { return await axe.run(); }")
                         violations = axe_results.get("violations", [])
                         for v in violations[:15]:
-                            bugs.append({
-                                "severity": {"critical": "High", "serious": "High",
-                                             "moderate": "Medium", "minor": "Low"}.get(v.get("impact"), "Medium"),
-                                "type": "Accessibility (axe-core)",
-                                "page": url,
-                                "message": f'{v.get("help")} ({len(v.get("nodes", []))} element(s))',
-                                "evidence": v.get("id", "axe-core"),
-                            })
+                            nodes = v.get("nodes", [])
+                            selector = nodes[0]["target"][0] if nodes and nodes[0].get("target") else "N/A"
+                            snippet = nodes[0].get("html", "")[:200] if nodes else ""
+                            wcag_tags = [t.upper() for t in v.get("tags", []) if t.startswith("wcag")]
+                            bugs.append(_bug(
+                                {"critical": "High", "serious": "High",
+                                 "moderate": "Medium", "minor": "Low"}.get(v.get("impact"), "Medium"),
+                                "Accessibility (axe-core)", url,
+                                f'{v.get("help")} ({len(nodes)} element(s))',
+                                v.get("id", "axe-core"),
+                                wcag=", ".join(wcag_tags) if wcag_tags else "See axe-core rule documentation",
+                                selector=selector,
+                                html_snippet=snippet,
+                                steps=f"1. Open {url}.\n2. Run an axe-core accessibility scan.\n3. Locate rule `{v.get('id')}` on element `{selector}`.",
+                                expected=v.get("description", "Element should pass the accessibility rule."),
+                                actual=f'{len(nodes)} element(s) fail: {v.get("help")}',
+                                help_url=v.get("helpUrl", "")
+                            ))
                         if not violations:
                             passed += 1
                     except Exception as e:
-                        bugs.append({"severity": "Low", "type": "Accessibility scan failed", "page": url,
-                                     "message": str(e), "evidence": "axe-core"})
+                        bugs.append(_bug("Low", "Accessibility scan failed", url, str(e), "axe-core"))
 
                 shot = shots / f"page_{len(pages):03d}.png"
                 await page.screenshot(path=str(shot), full_page=True)
                 pages[-1]["screenshot"] = str(shot)
+                for b in bugs:
+                    if b["page"] == url and not b.get("screenshot"):
+                        b["screenshot"] = str(shot)
 
             except Exception as e:
                 pages.append({"url": url, "status": 0})
-                bugs.append({"severity": "High", "type": "Navigation failure", "page": url,
-                             "message": str(e), "evidence": "page.goto"})
+                bugs.append(_bug("High", "Navigation failure", url, str(e), "page.goto"))
             finally:
                 await page.close()
 
         await browser.close()
 
-    # De-duplicate findings
     unique, keys = [], set()
     for b in bugs:
         k = (b["type"], b["page"], b["message"])
@@ -180,6 +222,27 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
             unique.append(b)
 
     return {"target": target, "pages": pages, "bugs": unique, "passed": passed}
+
+
+def _bug(severity, type_, page, message, evidence, wcag=None, selector=None,
+         html_snippet=None, steps=None, expected=None, actual=None, help_url=None,
+         screenshot=None):
+    return {
+        "severity": severity,
+        "priority": SEVERITY_TO_PRIORITY.get(severity, "P3"),
+        "type": type_,
+        "page": page,
+        "message": message,
+        "evidence": evidence,
+        "wcag": wcag or "N/A",
+        "selector": selector or "N/A",
+        "html_snippet": html_snippet or "",
+        "steps": steps or f"1. Navigate to {page}.\n2. Reproduce the condition described in the message.",
+        "expected": expected or "No issue should be present.",
+        "actual": actual or message,
+        "help_url": help_url or "",
+        "screenshot": screenshot,
+    }
 
 
 def run_scan(target, max_pages=10, test_mobile=True, include_accessibility=True, project_dir=None):
