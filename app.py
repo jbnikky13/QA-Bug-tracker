@@ -1,4 +1,24 @@
+import subprocess
+import sys
 import streamlit as st
+
+# --- Streamlit Community Cloud fix ---
+# Streamlit Cloud builds the environment from requirements.txt but does NOT
+# run `playwright install` automatically, so the Chromium binary Playwright
+# needs is missing at runtime (this is exactly the error you hit).
+# We install it once per container startup, cached via session_state so it
+# doesn't re-run on every rerun of the script.
+if "playwright_installed" not in st.session_state:
+    with st.spinner("Setting up browser engine (first run only, ~30s)..."):
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            st.error("Failed to install Playwright's browser. Scans will fail until this is resolved.")
+            st.code(result.stderr[-2000:])
+        st.session_state["playwright_installed"] = True
+
 from scanner import run_scan
 from reports import make_pdf, make_docx
 from pathlib import Path
