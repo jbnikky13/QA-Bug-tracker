@@ -224,10 +224,32 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
     return {"target": target, "pages": pages, "bugs": unique, "passed": passed}
 
 
+REMEDIATION = {
+    "HTTP error": "Investigate the server/application logs for this route and ensure it returns a successful (2xx) or an intentional redirect (3xx) response. If the resource is meant to be removed, return a proper 410 Gone or update all internal links pointing to it.",
+    "Broken image": "Verify the image asset exists at the referenced path and is deployed correctly. Update or remove the reference if the asset was moved or renamed.",
+    "Image request failed": "Check that the resource is reachable, not blocked by CORS/mixed-content rules, and that the hosting CDN or server is responding.",
+    "JavaScript console error": "Review the stack trace in the browser console, reproduce locally, and patch the underlying script error. Add error boundary handling where appropriate.",
+    "Failed network request": "Confirm the endpoint is deployed and reachable, check for CORS misconfiguration, and verify authentication/session requirements are met by the client.",
+    "Missing page title": "Add a unique, descriptive <title> element to the page's <head> for SEO and accessibility (screen readers announce it first).",
+    "Layout issue": "Adjust the responsible CSS (fix fixed widths, overflow rules, or absolute positioning) so content reflows within the viewport at the tested breakpoint.",
+    "Accessibility": "Add descriptive alt attributes to all meaningful images; use alt=\"\" for purely decorative images so screen readers skip them.",
+    "Accessibility (axe-core)": "Refer to the linked axe-core rule documentation for the specific WCAG success criterion and recommended fix pattern for this violation.",
+    "Navigation failure": "Confirm the URL is reachable, the server is not timing out, and there are no redirect loops or SSL/TLS certificate issues.",
+    "Static source warning": "Review the flagged source file and remove or properly handle the console.error() call before production deployment.",
+    "Scan failure": "Manually verify the target URL is reachable and correctly formatted; re-run the scan once resolved.",
+}
+
+
+def _title(type_, page, message):
+    short_msg = message.strip().split(".")[0][:70]
+    return f"{type_} — {short_msg}" if short_msg else f"{type_} on {page}"
+
+
 def _bug(severity, type_, page, message, evidence, wcag=None, selector=None,
          html_snippet=None, steps=None, expected=None, actual=None, help_url=None,
-         screenshot=None):
+         screenshot=None, remediation=None):
     return {
+        "title": _title(type_, page, message),
         "severity": severity,
         "priority": SEVERITY_TO_PRIORITY.get(severity, "P3"),
         "type": type_,
@@ -237,6 +259,7 @@ def _bug(severity, type_, page, message, evidence, wcag=None, selector=None,
         "wcag": wcag or "N/A",
         "selector": selector or "N/A",
         "html_snippet": html_snippet or "",
+        "remediation": remediation or REMEDIATION.get(type_, "Review the finding and apply an appropriate fix; retest to confirm resolution."),
         "steps": steps or f"1. Navigate to {page}.\n2. Reproduce the condition described in the message.",
         "expected": expected or "No issue should be present.",
         "actual": actual or message,
