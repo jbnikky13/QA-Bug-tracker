@@ -12,6 +12,7 @@ Expected bug dict fields (see scanner.py's _bug()):
 
 from datetime import datetime
 from pathlib import Path
+from xml.sax.saxutils import escape as _xml_escape
 
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
@@ -56,6 +57,20 @@ def _summary_counts(bugs):
 
 def _bug_title(b):
     return b.get("title") or f'{b.get("type","Finding")} on {b.get("page","")}'
+
+
+def _esc(value):
+    """XML-escape dynamic scan content before it goes into a ReportLab
+    Paragraph. Scan findings routinely contain raw '<', '>', '&' (e.g. an
+    accessibility message literally quoting an HTML tag, or an
+    html_snippet field) — ReportLab's Paragraph treats unescaped angle
+    brackets as its own markup and raises ValueError on anything it
+    doesn't recognize as a real tag. This does NOT escape the literal
+    <b>/<i> tags we author ourselves in f-strings — only values pulled
+    from the bug dict."""
+    if value is None:
+        return ""
+    return _xml_escape(str(value))
 
 
 # ---------------------------------------------------------------- DOCX -----
@@ -247,13 +262,13 @@ def make_pdf(result, out_path, researcher=None, program=None):
     # Cover / submission header
     story.append(Spacer(1, 1.3 * inch))
     story.append(Paragraph("Vulnerability &amp; QA Findings Report", title_style))
-    story.append(Paragraph(target, sub_style))
+    story.append(Paragraph(_esc(target), sub_style))
 
     header_data = [
-        ["Program / Target", program or target],
-        ["Submitted by", researcher or "Automated QA Scan"],
+        ["Program / Target", _esc(program or target)],
+        ["Submitted by", _esc(researcher or "Automated QA Scan")],
         ["Date", generated],
-        ["Assets in Scope", target],
+        ["Assets in Scope", _esc(target)],
         ["Pages Tested", str(len(pages))],
         ["Total Findings", str(len(bugs))],
     ]
@@ -271,7 +286,7 @@ def make_pdf(result, out_path, researcher=None, program=None):
     # Summary of findings (submission-list style)
     story.append(Paragraph("Summary of Findings", h1))
     sf_data = [["ID", "Title", "Severity", "Status"]] + [
-        [b.get("id", ""), Paragraph(_bug_title(b), body), b.get("severity", ""), "Open"] for b in bugs
+        [b.get("id", ""), Paragraph(_esc(_bug_title(b)), body), b.get("severity", ""), "Open"] for b in bugs
     ]
     sf_table = Table(sf_data, colWidths=[0.7 * inch, 3.5 * inch, 0.9 * inch, 0.9 * inch], repeatRows=1)
     sf_style = [
@@ -321,17 +336,17 @@ def make_pdf(result, out_path, researcher=None, program=None):
         sev = b.get("severity", "Low")
         heading_style = ParagraphStyle(f"H2_{sev}_{b.get('id','')}", parent=h2,
                                         textColor=SEVERITY_COLOR_RGB.get(sev, colors.black))
-        story.append(Paragraph(f'{b.get("id","")}: {_bug_title(b)}', heading_style))
+        story.append(Paragraph(f'{b.get("id","")}: {_esc(_bug_title(b))}', heading_style))
 
         meta_data = [
             ["Severity", f'{sev} (CVSS-equivalent: {SEVERITY_CVSS_BAND.get(sev,"N/A")})'],
             ["Priority", b.get("priority", "")],
-            ["Weakness / Category", b.get("type", "")],
-            ["Affected Asset (URL)", b.get("page", "")],
-            ["Affected Element", b.get("selector", "N/A")],
+            ["Weakness / Category", _esc(b.get("type", ""))],
+            ["Affected Asset (URL)", _esc(b.get("page", ""))],
+            ["Affected Element", _esc(b.get("selector", "N/A"))],
         ]
         if b.get("wcag") and b.get("wcag") != "N/A":
-            meta_data.append(["WCAG Reference", b.get("wcag")])
+            meta_data.append(["WCAG Reference", _esc(b.get("wcag"))])
         meta_table = Table(meta_data, colWidths=[1.7 * inch, 4.6 * inch])
         meta_table.setStyle(TableStyle([
             ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
@@ -343,18 +358,18 @@ def make_pdf(result, out_path, researcher=None, program=None):
         story.append(Spacer(1, 0.08 * inch))
 
         story.append(Paragraph("Summary", h3))
-        story.append(Paragraph(b.get("message", ""), body))
+        story.append(Paragraph(_esc(b.get("message", "")), body))
 
         story.append(Paragraph("Steps to Reproduce", h3))
         for line in (b.get("steps") or "").split("\n"):
             if line.strip():
-                story.append(Paragraph(line.strip(), body))
+                story.append(Paragraph(_esc(line.strip()), body))
 
         story.append(Paragraph("Proof of Concept", h3))
         if b.get("html_snippet"):
-            story.append(Paragraph(f'<b>Element:</b> {b["html_snippet"]}', body))
-        story.append(Paragraph(f'<b>Expected:</b> {b.get("expected","")}', body))
-        story.append(Paragraph(f'<b>Actual:</b> {b.get("actual","")}', body))
+            story.append(Paragraph(f'<b>Element:</b> {_esc(b["html_snippet"])}', body))
+        story.append(Paragraph(f'<b>Expected:</b> {_esc(b.get("expected",""))}', body))
+        story.append(Paragraph(f'<b>Actual:</b> {_esc(b.get("actual",""))}', body))
         if b.get("screenshot") and Path(b["screenshot"]).exists():
             try:
                 story.append(Spacer(1, 0.05 * inch))
@@ -365,15 +380,15 @@ def make_pdf(result, out_path, researcher=None, program=None):
         story.append(Paragraph("Impact", h3))
         story.append(Paragraph(
             f'This issue affects the {sev.lower()}-priority quality of the affected page. '
-            f'{b.get("actual","")} This may degrade user experience, functionality, or accessibility '
+            f'{_esc(b.get("actual",""))} This may degrade user experience, functionality, or accessibility '
             f'compliance depending on deployment context.', body))
 
         story.append(Paragraph("Suggested Remediation", h3))
-        story.append(Paragraph(b.get("remediation", ""), body))
+        story.append(Paragraph(_esc(b.get("remediation", "")), body))
 
         if b.get("help_url"):
             story.append(Paragraph("References", h3))
-            story.append(Paragraph(b.get("help_url"), body))
+            story.append(Paragraph(_esc(b.get("help_url")), body))
 
         story.append(Spacer(1, 0.12 * inch))
         story.append(HRFlowable(width="100%", color=colors.lightgrey))

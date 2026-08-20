@@ -8,7 +8,7 @@ AXE_CORE_CDN = "https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.9.1/axe.min.js
 SEVERITY_TO_PRIORITY = {"Critical": "P1", "High": "P1", "Medium": "P2", "Low": "P3"}
 
 
-async def _scan(target, max_pages, test_mobile, include_accessibility, project_dir=None):
+async def _scan(target, max_pages, test_mobile, include_accessibility, project_dir=None, progress_callback=None):
     root = f"{urlparse(target).scheme}://{urlparse(target).netloc}"
     queue, seen, pages, bugs = [target], set(), [], []
     passed = 0
@@ -254,6 +254,12 @@ async def _scan(target, max_pages, test_mobile, include_accessibility, project_d
             finally:
                 await page.close()
 
+            if progress_callback:
+                try:
+                    progress_callback(len(seen), max_pages, url, len(bugs), len(queue))
+                except Exception:
+                    pass
+
         await browser.close()
 
     unique, keys = [], set()
@@ -311,7 +317,7 @@ def _bug(severity, type_, page, message, evidence, wcag=None, selector=None,
     }
 
 
-def run_scan(target, max_pages=10, test_mobile=True, include_accessibility=True, project_dir=None):
+def run_scan(target, max_pages=10, test_mobile=True, include_accessibility=True, project_dir=None, progress_callback=None):
     return asyncio.run(_scan(
-        target, max_pages, test_mobile, include_accessibility, project_dir
+        target, max_pages, test_mobile, include_accessibility, project_dir, progress_callback
     ))
