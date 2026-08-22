@@ -18,7 +18,12 @@ if "playwright_installed" not in st.session_state:
             st.code(result.stderr[-2000:])
         st.session_state["playwright_installed"] = True
 
-from scanner import run_scan
+from scanner import run_scan as run_scan_local
+try:
+    from cloudflare_client import run_scan_cloudflare
+    CLOUDFLARE_AVAILABLE = True
+except ImportError:
+    CLOUDFLARE_AVAILABLE = False
 from reports import make_pdf, make_docx
 from pathlib import Path
 import tempfile
@@ -51,6 +56,15 @@ with st.expander("⚙️ Scan settings"):
     )
     test_mobile = st.checkbox("Test mobile viewport", True)
     include_accessibility = st.checkbox("Basic + axe-core accessibility checks", True)
+
+    use_cloudflare = False
+    if CLOUDFLARE_AVAILABLE:
+        use_cloudflare = st.toggle(
+            "☁️ Use Cloudflare Browser Run (instead of local Playwright)",
+            value=False,
+            help="Runs the scan on Cloudflare's managed browser infrastructure instead of the local/Streamlit Cloud Chromium install. Requires CLOUDFLARE_WORKER_URL to be set."
+        )
+    run_scan = run_scan_cloudflare if use_cloudflare else run_scan_local
 
 with st.expander("📋 Scan multiple links at once"):
     bulk_urls = st.text_area(
