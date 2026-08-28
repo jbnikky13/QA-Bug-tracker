@@ -6,6 +6,7 @@ from reports import make_pdf, make_docx
 from smart_contract_scanner import scan_solidity, scan_files
 from contract_address_scanner import CHAINS, scan_contract_address
 from security_reports import make_security_pdf
+from scan_history import enabled as history_enabled, save_scan, list_scans, get_scan
 try:
     from cloudflare_client import run_scan_cloudflare
     CLOUDFLARE_AVAILABLE=True
@@ -14,7 +15,14 @@ except ImportError: CLOUDFLARE_AVAILABLE=False
 st.set_page_config(page_title="QA Bug Tracker",page_icon="🧪",layout="wide")
 st.title("🧪 QA Bug Tracker")
 st.caption("Web QA + defensive smart-contract security analysis")
-site_tab,source_tab,address_tab=st.tabs(["🌐 Website Scanner","🔐 Source Scanner","⛓️ Contract Address Scanner"])
+
+def record_scan(scan_type, target, result, network=None):
+    if history_enabled():
+        sid=save_scan(scan_type,target,result,network=network)
+        if sid: st.session_state["last_scan_id"]=sid
+    return st.session_state.get("last_scan_id")
+
+site_tab,source_tab,address_tab,history_tab=st.tabs(["🌐 Website Scanner","🔐 Source Scanner","⛓️ Contract Address Scanner","📚 Scan History"])
 
 with site_tab:
     c1,c2=st.columns([4,1])
@@ -28,7 +36,11 @@ with site_tab:
         else:
             try:
                 fn=run_scan_cloudflare if cloud else run_scan_local
-                with st.spinner("Scanning website..."): st.session_state["result"]=fn(target,max_pages=max_pages,test_mobile=mobile,include_accessibility=accessibility)
+                with st.spinner("Scanning website..."):
+                    result=fn(target,max_pages=max_pages,test_mobile=mobile,include_accessibility=accessibility)
+                st.session_state["result"]=result
+                sid=record_scan("website",target,result)
+                if sid: st.success(f"Scan saved: {sid}")
             except Exception as e: st.error(f"Scanner error: {e}")
     r=st.session_state.get("result")
     if r:
@@ -47,7 +59,10 @@ with source_tab:
         inputs=[]
         if source.strip(): inputs.append((name if name.endswith(".sol") else name+".sol",source))
         for f in files or []: inputs.append((f.name,f.getvalue().decode("utf-8",errors="replace")))
-        if inputs: st.session_state["source_result"]=scan_files(inputs)
+        if inputs:
+            sr=scan_files(inputs); st.session_state["source_result"]=sr
+            sid=record_scan("solidity",", ".join(x[0] for x in inputs),sr)
+            if sid: st.success(f"Scan saved: {sid}")
         else: st.error("Upload a .sol file or paste Solidity source.")
     sr=st.session_state.get("source_result")
     if sr:
@@ -70,7 +85,11 @@ with address_tab:
         if not api_key: st.error("Add ETHERSCAN_API_KEY in Streamlit Secrets.")
         else:
             try:
-                with st.spinner(f"Analyzing {chain} contract..."): st.session_state["address_result"]=scan_contract_address(chain,address,api_key=api_key,static_scanner=scan_solidity)
+                with st.spinner(f"Analyzing {chain} contract..."):
+                    ar=scan_contract_address(chain,address,api_key=api_key,static_scanner=scan_solidity)
+                st.session_state["address_result"]=ar
+                sid=record_scan("contract_address",address,ar,network=chain)
+                if sid: st.success(f"Scan saved: {sid}")
             except Exception as e: st.error(f"Address scan failed: {e}")
     ar=st.session_state.get("address_result")
     if ar:
@@ -105,3 +124,32 @@ with address_tab:
             pdf=make_security_pdf(export,Path(td)/"contract_security_report.pdf")
             with open(pdf,"rb") as f: st.download_button("📄 Download PDF Security Report",f,"contract_security_report.pdf","application/pdf",use_container_width=True)
         st.caption("Automated heuristic triage only — not a formal smart-contract audit or guarantee of safety.")
+
+with history_tab:
+    st.subheader("📚 Scan History")
+    if not history_enabled():
+        st.warning("Persistent history is not configured yet. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Streamlit Secrets, then run supabase_schema.sql in your Supabase SQL Editor.")
+        st.code('SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"\nSUPABASE_SERVICE_ROLE_KEY = "YOUR_SERVER_ONLY_KEY"',language="toml")
+    else:
+        h1,h2=st.columns([2,1])
+        with h1: filter_type=st.selectbox("Filter",["All","Website","Solidity","Contract address"])
+        with h2: limit=st.number_input("Records",5,100,25,5)
+        type_map={"All":None,"Website":"website","Solidity":"solidity","Contract address":"contract_address"}
+        rows=list_scans(int(limit),type_map[filter_type])
+        if not rows: st.info("No saved scans yet.")
+        else:
+            st.dataframe([{"Scan ID":x["scan_id"],"Type":x["scan_type"],"Target":x["target"],"Network":x.get("network") or "—","Risk":x.get("risk_score") if x.get("risk_score") is not None else "—","Findings":x.get("finding_count",0),"Created":x.get("created_at","")} for x in rows],use_container_width=True,hide_index=True)
+            choices=[x["scan_id"] for x in rows]
+            selected=st.selectbox("Open saved scan",choices)
+            if st.button("📖 Load Scan Details",use_container_width=True):
+                detail=get_scan(selected)
+                if detail:
+                    st.session_state["history_detail"]=detail
+            detail=st.session_state.get("history_detail")
+            if detail:
+                st.markdown(f'### {detail.get("scan_id")}')
+                st.write(f'**Target:** {detail.get("target")}  •  **Type:** {detail.get("scan_type")}  •  **Network:** {detail.get("network") or "—"}')
+                if detail.get("risk_score") is not None: st.metric("Risk Score",f'{detail["risk_score"]}/100')
+                findings=detail.get("findings") or []
+                if findings: st.dataframe([{"Severity":f.get("severity"),"Finding":f.get("message"),"Location":f.get("file") or f.get("page") or "—"} for f in findings],use_container_width=True,hide_index=True)
+                st.download_button("📥 Download Saved JSON",json.dumps(detail.get("report",detail),indent=2),f'{detail.get("scan_id","scan")}.json',"application/json",use_container_width=True)
