@@ -1,26 +1,23 @@
 name = "qa-bug-tracker-worker"
-main = "src/index.ts"
+main = "index.ts"
 compatibility_date = "2026-08-20"
 compatibility_flags = ["nodejs_compat"]
 
-# Phase 1: browser automation
 [browser]
 binding = "MYBROWSER"
 
-# Phase 2: storage
 [[d1_databases]]
 binding = "DB"
 database_name = "qa-bug-tracker"
-database_id = "<YOUR-D1-DATABASE-ID>"          # wrangler d1 create qa-bug-tracker
+database_id = "<YOUR-D1-DATABASE-ID>"
 
 [[r2_buckets]]
 binding = "SCREENSHOTS"
-bucket_name = "qa-bug-tracker-screenshots"     # wrangler r2 bucket create qa-bug-tracker-screenshots
+bucket_name = "qa-bug-tracker-screenshots"
 
-# Phase 3: async jobs for large crawls
 [[queues.producers]]
 binding = "SCAN_QUEUE"
-queue = "qa-scan-jobs"                          # wrangler queues create qa-scan-jobs
+queue = "qa-scan-jobs"
 
 [[queues.consumers]]
 queue = "qa-scan-jobs"
