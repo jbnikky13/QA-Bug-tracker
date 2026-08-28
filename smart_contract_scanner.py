@@ -1,24 +1,26 @@
-"""Defensive Solidity smart-contract static analyzer.
-
-This scanner performs source-code pattern checks only. It does not deploy,
-execute, exploit, or send transactions to contracts.
+"""Defensive Solidity vulnerability scanner.
+Static source analysis only. It never deploys, executes, exploits, or sends transactions.
 """
 import re
 from pathlib import Path
 
 RULES = [
-    ("SC-001", "High", "Reentrancy risk", r"\.call\s*\{[^}]*value\s*:", "Review external calls and follow checks-effects-interactions or use a trusted reentrancy guard."),
-    ("SC-002", "High", "tx.origin used for authorization", r"\btx\.origin\b", "Do not use tx.origin for access control; prefer msg.sender with explicit authorization."),
-    ("SC-003", "High", "Delegatecall usage", r"\.(delegatecall|callcode)\s*\(", "Review delegatecall carefully for storage, target-control, and upgradeability risks."),
-    ("SC-004", "High", "Self-destruct capability", r"\bselfdestruct\s*\(", "Review who can reach this code path and whether destruction is still intended."),
-    ("SC-005", "Medium", "Unchecked low-level call", r"(?m)(?<!require\()(?<!assert\()\b\w+\.(call|send)\s*(?:\{|\()", "Check the returned success value from low-level calls and handle failure explicitly."),
-    ("SC-006", "Medium", "Block timestamp used", r"\bblock\.timestamp\b|\bnow\b", "Do not rely on block timestamps for security-critical randomness or precise timing."),
-    ("SC-007", "Medium", "Weak randomness pattern", r"\b(block\.timestamp|block\.number|block\.prevrandao)\b[^\n;]*(?:random|rand|seed)|(?:random|rand|seed)[^\n;]*\b(block\.timestamp|block\.number|block\.prevrandao)\b", "Blockchain values are predictable/manipulable enough to be unsafe for security-sensitive randomness."),
-    ("SC-008", "Medium", "Unbounded loop over storage", r"for\s*\([^;]*;[^;]*(?:\.length|length)[^;]*;", "Review loops over growing storage arrays; they can become too expensive to execute."),
-    ("SC-009", "Medium", "Floating pragma", r"pragma\s+solidity\s+\^", "Pin compiler versions for production deployments to reduce unexpected compiler changes."),
-    ("SC-010", "Medium", "Potential missing access control", r"function\s+\w+\s*\([^)]*\)\s*(?:public|external)[^{;]*\{[^}]{0,500}(?:_mint|mint\(|withdraw\(|upgrade|setOwner|setAdmin|pause\(", "Review privileged functions for explicit authorization such as onlyOwner or role checks."),
-    ("SC-011", "Low", "Deprecated block.number/now timing pattern", r"\bnow\b", "Use block.timestamp on supported Solidity versions and avoid time-based security assumptions."),
-    ("SC-012", "Low", "Inline assembly", r"\bassembly\s*\{", "Review assembly manually because compiler and type safety guarantees are reduced."),
+    ("Reentrancy", "High", r"\.call\s*\{[^}]*value\s*:", "External value transfer detected; review state updates before external calls and consider a reentrancy guard."),
+    ("tx.origin authorization", "High", r"\btx\.origin\b", "Avoid tx.origin for authorization; use msg.sender and explicit access control."),
+    ("Delegatecall", "High", r"\.(delegatecall|callcode)\s*\(", "Review delegatecall target control, storage layout, and upgrade authorization."),
+    ("Selfdestruct", "High", r"\bselfdestruct\s*\(", "Review reachability and authorization of contract-destruction logic."),
+    ("Unchecked low-level call", "Medium", r"(?m)\b\w+\.(call|send)\s*(?:\{|\()", "Verify the returned success value and handle failed calls explicitly."),
+    ("Timestamp dependence", "Medium", r"\bblock\.timestamp\b|\bnow\b", "Review whether timestamps influence security-sensitive decisions or randomness."),
+    ("Weak randomness", "High", r"\b(block\.timestamp|block\.number|block\.prevrandao)\b[^\n;]*(?:random|rand|seed)|(?:random|rand|seed)[^\n;]*\b(block\.timestamp|block\.number|block\.prevrandao)\b", "Do not use predictable blockchain values as security-sensitive randomness."),
+    ("Unbounded loop", "Medium", r"for\s*\([^;]*;[^;]*(?:\.length|length)[^;]*;", "Review loops over growing storage collections for gas-exhaustion/DoS risk."),
+    ("Floating compiler pragma", "Low", r"pragma\s+solidity\s+\^", "Pin the production compiler version."),
+    ("Potential missing access control", "High", r"function\s+\w+\s*\([^)]*\)\s*(?:public|external)[^{;]*\{[^}]{0,700}(?:_mint|mint\(|withdraw\(|upgrade|setOwner|setAdmin|pause\(", "Review privileged state-changing functions for onlyOwner/role checks."),
+    ("Inline assembly", "Low", r"\bassembly\s*\{", "Manually review assembly because normal Solidity safety checks are reduced."),
+    ("Dangerous delegate target", "High", r"delegatecall\s*\([^)]*\b(address|target|implementation)\b", "Confirm the delegatecall target cannot be controlled by an unauthorized party."),
+    ("External call before state update", "High", r"\.call\s*(?:\{|\()[\s\S]{0,800}(?:=\s*false|=\s*true|[-+]=|\+=|-=)", "Review checks-effects-interactions ordering around external calls."),
+    ("Unprotected initializer", "High", r"function\s+(?:initialize|init)\s*\([^)]*\)[^{]*\{", "For upgradeable contracts, ensure initialization is one-time and properly authorized."),
+    ("Arbitrary token approval", "Medium", r"\.approve\s*\([^,]+,\s*(?:type\(uint\)\.max|uint\(-?1\)|2\*\*256)", "Review unlimited approvals and spender trust boundaries."),
+    ("Hard-coded privileged address", "Medium", r"(?:onlyOwner|owner|admin)[^\n;]*0x[a-fA-F0-9]{40}", "Review hard-coded privileged addresses and upgrade/admin recovery procedures."),
 ]
 
 
@@ -33,12 +35,30 @@ def _snippet(source, line, radius=1):
     return "\n".join(f"{i+1}: {lines[i]}" for i in range(start, end))
 
 
+def _summary(findings):
+    counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+    for f in findings:
+        counts[f.get("severity", "Low")] = counts.get(f.get("severity", "Low"), 0) + 1
+    return counts
+
+
+def _risk_score(findings):
+    weights = {"Critical": 30, "High": 15, "Medium": 7, "Low": 2}
+    score = min(100, sum(weights.get(f.get("severity"), 1) for f in findings))
+    if score >= 60: label = "Critical review priority"
+    elif score >= 35: label = "High review priority"
+    elif score >= 15: label = "Medium review priority"
+    elif score > 0: label = "Low review priority"
+    else: label = "No heuristic findings"
+    return score, label
+
+
 def scan_solidity(source, filename="Contract.sol"):
     findings = []
     if not source.strip():
-        return {"filename": filename, "lines": 0, "findings": [], "summary": _summary([])}
+        return {"filename": filename, "lines": 0, "findings": [], "summary": _summary([]), "risk_score": 0, "risk_label": "No source"}
 
-    for rule_id, severity, title, pattern, remediation in RULES:
+    for title, severity, pattern, remediation in RULES:
         try:
             matches = list(re.finditer(pattern, source, re.IGNORECASE | re.MULTILINE | re.DOTALL))
         except re.error:
@@ -50,25 +70,22 @@ def scan_solidity(source, filename="Contract.sol"):
                 continue
             seen_lines.add(line)
             findings.append({
-                "id": rule_id,
-                "severity": severity,
-                "type": "Smart contract security",
-                "file": filename,
-                "line": line,
-                "message": title,
-                "evidence": _snippet(source, line),
-                "remediation": remediation,
+                "id": "", "severity": severity, "type": "Smart contract vulnerability check",
+                "file": filename, "line": line, "message": title,
+                "evidence": _snippet(source, line), "remediation": remediation,
             })
 
     if not re.search(r"pragma\s+solidity", source, re.IGNORECASE):
-        findings.append({"id":"SC-013","severity":"Low","type":"Smart contract security","file":filename,"line":1,"message":"No Solidity pragma detected","evidence":"No pragma solidity statement found.","remediation":"Declare and pin a supported Solidity compiler version."})
-    if not re.search(r"\bcontract\s+\w+", source):
-        findings.append({"id":"SC-014","severity":"Low","type":"Smart contract security","file":filename,"line":1,"message":"No contract declaration detected","evidence":"No contract/interface/library declaration was detected.","remediation":"Confirm the uploaded source is the intended Solidity source file."})
+        findings.append({"id":"","severity":"Low","type":"Smart contract quality","file":filename,"line":1,"message":"No Solidity pragma detected","evidence":"No pragma solidity statement found.","remediation":"Declare a supported and pinned Solidity compiler version."})
+    if not re.search(r"\b(contract|interface|library)\s+\w+", source):
+        findings.append({"id":"","severity":"Low","type":"Smart contract quality","file":filename,"line":1,"message":"No contract/interface/library declaration detected","evidence":"The uploaded source does not appear to contain a Solidity declaration.","remediation":"Confirm that the intended Solidity source was supplied."})
 
-    findings.sort(key=lambda x: ("Critical High Medium Low".split().index(x["severity"]) if x["severity"] in "Critical High Medium Low" else 9, x["line"]))
-    for i, finding in enumerate(findings, 1):
-        finding["id"] = f"SC-{i:03d}"
-    return {"filename": filename, "lines": len(source.splitlines()), "findings": findings, "summary": _summary(findings)}
+    order = {"Critical":0,"High":1,"Medium":2,"Low":3}
+    findings.sort(key=lambda x: (order.get(x["severity"], 9), x["line"]))
+    for i, f in enumerate(findings, 1):
+        f["id"] = f"SC-{i:03d}"
+    score, label = _risk_score(findings)
+    return {"filename": filename, "lines": len(source.splitlines()), "findings": findings, "summary": _summary(findings), "risk_score": score, "risk_label": label}
 
 
 def scan_files(files):
@@ -76,12 +93,6 @@ def scan_files(files):
     for filename, source in files:
         if Path(filename).suffix.lower() == ".sol":
             results.append(scan_solidity(source, filename))
-    all_findings = [f for r in results for f in r["findings"]]
-    return {"files": results, "findings": all_findings, "summary": _summary(all_findings)}
-
-
-def _summary(findings):
-    counts = {"Critical":0,"High":0,"Medium":0,"Low":0}
-    for finding in findings:
-        counts[finding.get("severity","Low")] = counts.get(finding.get("severity","Low"),0) + 1
-    return counts
+    findings = [f for r in results for f in r["findings"]]
+    score, label = _risk_score(findings)
+    return {"files": results, "findings": findings, "summary": _summary(findings), "risk_score": score, "risk_label": label}
