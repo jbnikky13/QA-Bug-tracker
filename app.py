@@ -1,151 +1,122 @@
+import json, os, shutil, tempfile, zipfile
+from pathlib import Path
 import streamlit as st
 from scanner import run_scan as run_scan_local
+from reports import make_pdf, make_docx
+from smart_contract_scanner import scan_solidity, scan_files
+from contract_address_scanner import CHAINS, scan_contract_address
 try:
     from cloudflare_client import run_scan_cloudflare
     CLOUDFLARE_AVAILABLE = True
 except ImportError:
     CLOUDFLARE_AVAILABLE = False
-from reports import make_pdf, make_docx
-from smart_contract_scanner import scan_solidity, scan_files
-from contract_address_scanner import CHAINS, scan_contract_address
-from pathlib import Path
-import tempfile, zipfile, shutil, json, os
 
 st.set_page_config(page_title="QA Bug Tracker", page_icon="🧪", layout="wide")
 st.title("🧪 QA Bug Tracker")
-st.caption("Test websites and EVM smart contracts with defensive automated QA/security checks.")
+st.caption("Web QA + defensive smart-contract security analysis")
 
-site_tab, contract_tab, address_tab = st.tabs(["🌐 Website Scanner", "🔐 Source Scanner", "⛓️ Contract Address Scanner"])
+site_tab, source_tab, address_tab = st.tabs(["🌐 Website Scanner", "🔐 Source Scanner", "⛓️ Contract Address Scanner"])
 
 with site_tab:
-    col_url, col_btn = st.columns([4, 1])
-    with col_url: target = st.text_input("Website URL", placeholder="https://example.com", label_visibility="collapsed")
-    with col_btn: scan_clicked = st.button("🚀 Scan Website", type="primary", use_container_width=True)
+    c1,c2=st.columns([4,1])
+    with c1: target=st.text_input("Website URL",placeholder="https://example.com",label_visibility="collapsed")
+    with c2: go=st.button("🚀 Scan Website",type="primary",use_container_width=True)
     with st.expander("⚙️ Scan settings"):
-        max_pages = st.slider("Maximum pages to crawl per site", 1, 50, 10)
-        test_mobile = st.checkbox("Test mobile viewport", True)
-        include_accessibility = st.checkbox("Accessibility checks", True)
-        use_cloudflare = st.toggle("☁️ Use Cloudflare Browser Run", value=False) if CLOUDFLARE_AVAILABLE else False
-        run_scan = run_scan_cloudflare if use_cloudflare else run_scan_local
-    with st.expander("📋 Scan multiple links at once"):
-        bulk_urls = st.text_area("One URL per line", placeholder="https://example.com/page1\nhttps://example.com/page2", height=120)
-        bulk_start = st.button("🚀 Scan all pasted links", use_container_width=True)
-    with st.expander("📦 Upload a full project ZIP (optional)"):
-        uploaded_zip = st.file_uploader("Upload one ZIP containing the website/web-app project", type=["zip"])
-        if uploaded_zip:
-            upload_dir = Path(tempfile.gettempdir()) / "qa_uploaded_project"
-            if upload_dir.exists(): shutil.rmtree(upload_dir)
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                with zipfile.ZipFile(uploaded_zip) as z:
-                    base = upload_dir.resolve()
-                    for member in z.infolist():
-                        destination = (upload_dir / member.filename).resolve()
-                        if not str(destination).startswith(str(base)): raise ValueError("Unsafe ZIP path detected.")
-                    z.extractall(upload_dir)
-                st.success(f"ZIP uploaded successfully — {sum(1 for p in upload_dir.rglob('*') if p.is_file())} project files extracted.")
-                st.session_state["uploaded_project"] = str(upload_dir)
-            except Exception as e: st.error(f"Could not read the ZIP: {e}")
-    def _parse_bulk_urls(raw):
-        return [line.strip() if line.strip().startswith(("http://","https://")) else "https://"+line.strip() for line in raw.splitlines() if line.strip()]
-    def _do_scan(url):
-        return run_scan(url,max_pages=max_pages,test_mobile=test_mobile,include_accessibility=include_accessibility,project_dir=st.session_state.get("uploaded_project"))
-    if scan_clicked:
-        if not target.startswith(("http://","https://")): st.error("Enter a complete URL beginning with http:// or https://"); st.stop()
-        with st.status("Scanning website...", expanded=True) as status:
-            progress_bar=st.progress(0)
-            def progress(scanned,total,current_url,bug_count,queued):
-                progress_bar.progress(min(scanned/max(total,1),1.0)); status.update(label=f"Scanned {scanned}/{total} page(s) — {bug_count} issue(s) found")
-            try:
-                result=run_scan(target,max_pages=max_pages,test_mobile=test_mobile,include_accessibility=include_accessibility,project_dir=st.session_state.get("uploaded_project"),progress_callback=progress)
-                status.update(label=f"Scan complete — {len(result['bugs'])} issue(s) found",state="complete"); st.session_state["result"]=result
-            except Exception as e: status.update(label="Scan failed",state="error"); st.error(f"Scanner error: {e}")
-    if bulk_start:
-        urls=_parse_bulk_urls(bulk_urls)
-        if not urls: st.error("Paste at least one valid URL.")
+        max_pages=st.slider("Maximum pages",1,50,10)
+        mobile=st.checkbox("Test mobile viewport",True)
+        accessibility=st.checkbox("Accessibility checks",True)
+        cloud=st.toggle("☁️ Use Cloudflare Browser Run",False) if CLOUDFLARE_AVAILABLE else False
+    if go:
+        if not target.startswith(("http://","https://")): st.error("Enter a complete URL beginning with http:// or https://")
         else:
-            combined={"target":f"{len(urls)} pasted links","pages":[],"bugs":[],"passed":0}
-            with st.status("Scanning pasted links...",expanded=True) as status:
-                bar=st.progress(0)
-                for i,url in enumerate(urls):
-                    status.update(label=f"Scanning link {i+1}/{len(urls)}: {url}")
-                    try:
-                        r=_do_scan(url); combined["pages"].extend(r["pages"]); combined["bugs"].extend(r["bugs"]); combined["passed"]+=r["passed"]
-                    except Exception as e: combined["bugs"].append({"severity":"High","type":"Scan failure","page":url,"message":str(e),"evidence":"run_scan"})
-                    bar.progress((i+1)/len(urls))
-                for i,b in enumerate(combined["bugs"],1): b["id"]=f"BUG-{i:03d}"
-                status.update(label=f"Scan complete — {len(combined['bugs'])} issue(s)",state="complete")
-            st.session_state["result"]=combined
-    result=st.session_state.get("result")
-    if result:
-        bugs=result["bugs"]; pages=result["pages"]; st.divider(); st.subheader("📋 Findings")
-        c1,c2,c3,c4=st.columns(4); c1.metric("Pages tested",len(pages)); c2.metric("Issues",len(bugs)); c3.metric("Critical/High",sum(b.get("severity") in ("Critical","High") for b in bugs)); c4.metric("Passed checks",result["passed"])
-        if bugs:
-            st.dataframe([{"ID":b.get("id"),"Severity":b.get("severity"),"Type":b.get("type"),"Page":b.get("page"),"Message":b.get("message")} for b in bugs],use_container_width=True,hide_index=True)
-            for b in bugs:
-                with st.expander(f'{b.get("id")} · {b.get("severity")} · {b.get("type")}'):
-                    st.write("**Page:**",b.get("page")); st.write("**Message:**",b.get("message")); st.write("**Evidence:**",b.get("evidence", ""))
-        else: st.success("No automated issues were detected.")
-        st.divider(); st.subheader("📥 Download report")
-        tmp=Path(tempfile.gettempdir()); pdf=make_pdf(result,tmp/"qa_report.pdf"); docx=make_docx(result,tmp/"qa_report.docx")
-        a,b=st.columns(2)
-        with a:
-            with open(pdf,"rb") as f: st.download_button("📄 Download PDF",f,"qa_report.pdf","application/pdf",use_container_width=True)
-        with b:
-            with open(docx,"rb") as f: st.download_button("📝 Download DOCX",f,"qa_report.docx","application/vnd.openxmlformats-officedocument.wordprocessingml.document",use_container_width=True)
-    else: st.info("👆 Paste a website URL above and click **Scan Website** to get started.")
+            try:
+                fn=run_scan_cloudflare if cloud else run_scan_local
+                with st.spinner("Scanning website..."):
+                    st.session_state["result"]=fn(target,max_pages=max_pages,test_mobile=mobile,include_accessibility=accessibility)
+            except Exception as e: st.error(f"Scanner error: {e}")
+    r=st.session_state.get("result")
+    if r:
+        bugs=r.get("bugs",[]); pages=r.get("pages",[])
+        a,b,c,d=st.columns(4); a.metric("Pages",len(pages)); b.metric("Issues",len(bugs)); c.metric("Critical/High",sum(x.get("severity") in ("Critical","High") for x in bugs)); d.metric("Passed",r.get("passed",0))
+        if bugs: st.dataframe([{"ID":x.get("id"),"Severity":x.get("severity"),"Type":x.get("type"),"Page":x.get("page"),"Message":x.get("message")} for x in bugs],use_container_width=True,hide_index=True)
+        else: st.success("No automated issues detected.")
 
-with contract_tab:
-    st.subheader("🔐 Smart Contract Security Scanner")
-    st.caption("Defensive Solidity source-code analysis. Use only contracts/source code you own or are authorized to review.")
-    contract_files = st.file_uploader("Upload Solidity source files", type=["sol"], accept_multiple_files=True, key="solidity_files")
-    pasted = st.text_area("Or paste Solidity source", height=280, placeholder="pragma solidity ^0.8.20;\n\ncontract Example { ... }")
-    contract_name = st.text_input("Contract filename", value="PastedContract.sol")
-    contract_scan = st.button("🔎 Scan Smart Contract", type="primary", use_container_width=True)
-    if contract_scan:
-        sources=[]
-        if pasted.strip(): sources.append((contract_name if contract_name.endswith('.sol') else contract_name+'.sol', pasted))
-        for f in contract_files or []:
-            try: sources.append((f.name, f.getvalue().decode('utf-8', errors='replace')))
-            except Exception as e: st.warning(f"Could not read {f.name}: {e}")
-        if not sources: st.error("Upload at least one .sol file or paste Solidity source.")
-        else: st.session_state["contract_result"] = scan_files(sources)
-    contract_result=st.session_state.get("contract_result")
-    if contract_result:
-        findings=contract_result["findings"]; summary=contract_result["summary"]; st.divider(); st.subheader("Security Findings")
-        c1,c2,c3,c4=st.columns(4); c1.metric("Files",len(contract_result["files"])); c2.metric("High",summary.get("High",0)); c3.metric("Medium",summary.get("Medium",0)); c4.metric("Low",summary.get("Low",0))
-        if findings:
-            st.dataframe([{"ID":x["id"],"Severity":x["severity"],"File":x["file"],"Line":x["line"],"Finding":x["message"]} for x in findings],use_container_width=True,hide_index=True)
-            for x in findings:
-                with st.expander(f'{x["id"]} · {x["severity"]} · {x["message"]}'):
-                    st.write("**File:**",x["file"]); st.write("**Line:**",x["line"]); st.code(x["evidence"], language="solidity"); st.write("**Recommended review:**",x["remediation"])
-        else: st.success("No heuristic findings were detected. This is not proof that the contract is secure; manual review and a dedicated audit are still recommended.")
+with source_tab:
+    st.subheader("🔐 Solidity Source Vulnerability Scanner")
+    files=st.file_uploader("Upload .sol files",type=["sol"],accept_multiple_files=True,key="source_files")
+    source=st.text_area("Or paste Solidity source",height=260)
+    name=st.text_input("Filename", "Contract.sol")
+    if st.button("🔎 Scan Solidity",type="primary",use_container_width=True):
+        inputs=[]
+        if source.strip(): inputs.append((name if name.endswith(".sol") else name+".sol",source))
+        for f in files or []: inputs.append((f.name,f.getvalue().decode("utf-8",errors="replace")))
+        if inputs: st.session_state["source_result"]=scan_files(inputs)
+        else: st.error("Upload a .sol file or paste Solidity source.")
+    sr=st.session_state.get("source_result")
+    if sr:
+        s=sr["summary"]; x1,x2,x3,x4,x5=st.columns(5); x1.metric("Risk score",f'{sr.get("risk_score",0)}/100'); x2.metric("Files",len(sr["files"])); x3.metric("Critical",s.get("Critical",0)); x4.metric("High",s.get("High",0)); x5.metric("Medium",s.get("Medium",0))
+        st.info(sr.get("risk_label",""))
+        if sr["findings"]:
+            st.dataframe([{"ID":f["id"],"Severity":f["severity"],"File":f["file"],"Line":f["line"],"Finding":f["message"]} for f in sr["findings"]],use_container_width=True,hide_index=True)
+            for f in sr["findings"]:
+                with st.expander(f'{f["id"]} · {f["severity"]} · {f["message"]}'):
+                    st.code(f["evidence"],language="solidity"); st.write("**Recommended review:**",f["remediation"])
+        else: st.success("No heuristic findings detected. This is not proof of security.")
 
 with address_tab:
-    st.subheader("⛓️ Contract Address Scanner")
-    st.caption("Retrieve publicly verified source metadata and run the local Solidity heuristics. No transactions are sent.")
-    chain_name=st.selectbox("Network", list(CHAINS.keys()))
-    address=st.text_input("Contract address", placeholder="0x...")
-    api_key=st.text_input("Etherscan API V2 key", value=os.getenv("ETHERSCAN_API_KEY", ""), type="password", help="For deployment, store this as ETHERSCAN_API_KEY rather than committing it to GitHub.")
-    address_scan=st.button("🔎 Analyze Contract Address", type="primary", use_container_width=True)
-    if address_scan:
-        if not api_key: st.error("Add an Etherscan API V2 key first.")
+    st.subheader("⛓️ Contract Address Security Scanner")
+    st.caption("Retrieves public explorer metadata/source and runs defensive static checks. No transactions are sent.")
+    chain=st.selectbox("Network",list(CHAINS.keys()))
+    address=st.text_input("Contract address",placeholder="0x...")
+    default_key=os.getenv("ETHERSCAN_API_KEY","")
+    try: default_key=st.secrets.get("ETHERSCAN_API_KEY",default_key)
+    except Exception: pass
+    api_key=st.text_input("Etherscan API V2 key",value=default_key,type="password",help="Store it as ETHERSCAN_API_KEY in Streamlit Secrets for deployment.")
+    if st.button("🔎 Analyze Contract Address",type="primary",use_container_width=True):
+        if not api_key: st.error("Add ETHERSCAN_API_KEY in Streamlit Secrets.")
         else:
             try:
-                with st.spinner(f"Retrieving {chain_name} contract metadata..."):
-                    address_result=scan_contract_address(chain_name,address,api_key=api_key,static_scanner=scan_solidity)
-                st.session_state["address_result"]=address_result
+                with st.spinner(f"Analyzing {chain} contract..."):
+                    st.session_state["address_result"]=scan_contract_address(chain,address,api_key=api_key,static_scanner=scan_solidity)
             except Exception as e: st.error(f"Address scan failed: {e}")
     ar=st.session_state.get("address_result")
     if ar:
-        st.divider(); st.subheader("Contract Overview")
-        c1,c2,c3,c4=st.columns(4); c1.metric("Verification", "Verified" if ar["verified"] else "Unverified"); c2.metric("Risk",ar["risk"]); c3.metric("High findings",sum(x.get("severity")=="High" for x in ar["findings"])); c4.metric("Medium findings",sum(x.get("severity")=="Medium" for x in ar["findings"]))
-        st.write("**Contract:**",ar["contract_name"]); st.write("**Compiler:**",ar["compiler"]); st.write("**Proxy:**", "Yes" if ar["proxy"] else "No"); st.write("**License:**",ar["license"]); st.write("**Explorer:**",ar["explorer_url"])
-        if not ar["verified"]: st.warning("The explorer did not return verified source code, so source-level analysis could not be performed.")
-        if ar["findings"]:
-            st.dataframe([{"ID":x["id"],"Severity":x["severity"],"File":x["file"],"Line":x["line"],"Finding":x["message"]} for x in ar["findings"]],use_container_width=True,hide_index=True)
-            for x in ar["findings"]:
-                with st.expander(f'{x["id"]} · {x["severity"]} · {x["message"]}'):
-                    st.code(x["evidence"],language="solidity"); st.write("**Recommended review:**",x["remediation"])
-        st.download_button("📥 Download JSON result",json.dumps(ar,indent=2),"contract_scan.json","application/json",use_container_width=True)
-        st.caption("Heuristic scanner only — this is not a formal smart-contract audit or guarantee of safety.")
+        findings=ar.get("findings",[])
+        high=sum(f.get("severity")=="High" for f in findings); med=sum(f.get("severity")=="Medium" for f in findings); crit=sum(f.get("severity")=="Critical" for f in findings); low=sum(f.get("severity")=="Low" for f in findings)
+        # A transparent triage score: weighted findings, capped at 100. Unverified source is explicitly separated.
+        score=min(100,crit*30+high*15+med*7+low*2)
+        if not ar.get("verified"): score=max(score,10); label="Unverified source — limited analysis"
+        elif score>=60: label="Critical review priority"
+        elif score>=35: label="High review priority"
+        elif score>=15: label="Medium review priority"
+        elif score>0: label="Low review priority"
+        else: label="No heuristic findings"
+        st.divider(); st.subheader("🛡️ Contract Security Report")
+        score_col, details_col=st.columns([1.2,2.8])
+        with score_col:
+            st.metric("Risk Score",f"{score}/100")
+            st.progress(score/100)
+            st.warning(label) if score>=35 else st.info(label)
+        with details_col:
+            a,b,c,d,e=st.columns(5); a.metric("Critical",crit); b.metric("High",high); c.metric("Medium",med); d.metric("Low",low); e.metric("Verification","Verified" if ar.get("verified") else "Unverified")
+            st.write(f'**Contract:** {ar.get("contract_name","Unknown")}  •  **Network:** {ar.get("network")}  •  **Chain ID:** {ar.get("chain_id")}')
+        st.markdown("### Contract Metadata")
+        m1,m2=st.columns(2)
+        with m1:
+            st.write("**Compiler:**",ar.get("compiler","Unknown")); st.write("**Optimization:**",ar.get("optimization","Unknown")); st.write("**License:**",ar.get("license","Unknown"))
+        with m2:
+            st.write("**Proxy:**","Yes" if ar.get("proxy") else "No"); st.write("**Implementation:**",ar.get("implementation") or "N/A"); st.write("**Address:**",ar.get("address"))
+        if ar.get("explorer_url"): st.link_button("🔗 Open Block Explorer",ar["explorer_url"],use_container_width=True)
+        if not ar.get("verified"): st.warning("Source is not verified by the explorer. The score is therefore limited and should not be interpreted as a full audit.")
+        st.markdown("### Vulnerability Checks")
+        if findings:
+            st.dataframe([{"ID":f["id"],"Severity":f["severity"],"File":f["file"],"Line":f["line"],"Finding":f["message"]} for f in findings],use_container_width=True,hide_index=True)
+            for f in findings:
+                with st.expander(f'{f["id"]} · {f["severity"]} · {f["message"]}'):
+                    st.write(f'**File:** {f["file"]}  |  **Line:** {f["line"]}')
+                    st.code(f["evidence"],language="solidity")
+                    st.write("**Recommended review:**",f["remediation"])
+        else: st.success("No heuristic vulnerability findings detected.")
+        export=dict(ar); export["risk_score"]=score; export["risk_label"]=label; export["finding_counts"]={"Critical":crit,"High":high,"Medium":med,"Low":low}
+        st.download_button("📥 Download Security JSON",json.dumps(export,indent=2),"contract_security_report.json","application/json",use_container_width=True)
+        st.caption("Automated heuristic analysis only; not a formal smart-contract audit or guarantee of safety.")
