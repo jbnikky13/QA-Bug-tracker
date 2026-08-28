@@ -1,4 +1,4 @@
-"""Website scanner with a browser-enhanced mode and HTTP fallback."""
+"""Website scanner with browser-enhanced mode and HTTP fallback."""
 import concurrent.futures
 import requests
 from bs4 import BeautifulSoup
@@ -16,35 +16,30 @@ def _check_links(html, base_url, check_external=True):
     links = set()
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
-        if href.startswith(("mailto:", "tel:", "javascript:", "#")):
-            continue
+        if href.startswith(("mailto:", "tel:", "javascript:", "#")): continue
         full = urljoin(base_url, href)
-        if not check_external and urlparse(full).netloc != base_netloc:
-            continue
+        if not check_external and urlparse(full).netloc != base_netloc: continue
         links.add((full, a.get_text(strip=True)[:60]))
     def check(pair):
         link, text = pair
         try:
             try:
                 r = requests.head(link, allow_redirects=True, timeout=8)
-                if r.status_code in (405, 501):
-                    r = requests.get(link, allow_redirects=True, timeout=8, stream=True)
+                if r.status_code in (405, 501): r = requests.get(link, allow_redirects=True, timeout=8, stream=True)
             except requests.RequestException:
                 r = requests.get(link, allow_redirects=True, timeout=8, stream=True)
-            if r.status_code >= 400:
-                return {"url": link, "status": r.status_code, "error": None, "text": text}
+            if r.status_code >= 400: return {"url":link,"status":r.status_code,"error":None,"text":text}
         except requests.RequestException as e:
-            return {"url": link, "status": None, "error": str(e), "text": text}
+            return {"url":link,"status":None,"error":str(e),"text":text}
         return None
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
         return [x for x in ex.map(check, links) if x]
 
 def _basic_scan(url, check_external_links=True, timeout_ms=30000):
-    result = {"url": url, "console_errors": [], "network_failures": [], "broken_links": [], "layout_issues": [], "accessibility_issues": [], "errors": []}
+    result = {"url":url,"console_errors":[],"network_failures":[],"broken_links":[],"layout_issues":[],"accessibility_issues":[],"errors":[]}
     try:
-        r = requests.get(url, timeout=max(5, timeout_ms // 1000), headers={"User-Agent": "QA-Bug-Tracker/1.0"})
-        if r.status_code >= 400:
-            result["errors"].append(f"Page returned HTTP {r.status_code}")
+        r = requests.get(url, timeout=max(5, timeout_ms//1000), headers={"User-Agent":"QA-Bug-Tracker/1.0"})
+        if r.status_code >= 400: result["errors"].append(f"Page returned HTTP {r.status_code}")
         soup = BeautifulSoup(r.text, "html.parser")
         if not soup.title or not soup.title.get_text(strip=True):
             result["accessibility_issues"].append({"impact":"moderate","description":"Page has no document title.","help":"Add a descriptive <title>.","nodes":1})
@@ -57,13 +52,11 @@ def _basic_scan(url, check_external_links=True, timeout_ms=30000):
     return result
 
 def scan_url(url, check_external_links=True, timeout_ms=30000):
-    if sync_playwright is None:
-        return _basic_scan(url, check_external_links, timeout_ms)
+    if sync_playwright is None: return _basic_scan(url, check_external_links, timeout_ms)
     results = {"url":url,"console_errors":[],"network_failures":[],"broken_links":[],"layout_issues":[],"accessibility_issues":[],"errors":[]}
     try:
         with sync_playwright() as p:
-            try:
-                browser = p.chromium.launch(headless=True)
+            try: browser = p.chromium.launch(headless=True)
             except Exception as e:
                 out = _basic_scan(url, check_external_links, timeout_ms)
                 out["errors"].insert(0, f"Browser unavailable; used HTTP fallback: {e}")
@@ -80,19 +73,16 @@ def scan_url(url, check_external_links=True, timeout_ms=30000):
                 except Exception: pass
                 html = page.content()
                 results["layout_issues"] = page.evaluate("""() => { const x=[]; if(document.documentElement.scrollWidth>window.innerWidth+5)x.push('Horizontal overflow detected.'); document.querySelectorAll('img').forEach(i=>{if(!i.alt)x.push('Image missing alt text.');}); return [...new Set(x)].slice(0,25); }""")
-                if True:
-                    try:
-                        page.add_script_tag(url=AXE_CORE_CDN)
-                        axe = page.evaluate("async () => await axe.run()")
-                        for v in axe.get("violations", []):
-                            results["accessibility_issues"].append({"impact":v.get("impact"),"description":v.get("description"),"help":v.get("help"),"nodes":len(v.get("nodes",[]))})
-                    except Exception as e:
-                        results["errors"].append(f"Accessibility scan failed: {e}")
+                try:
+                    page.add_script_tag(url=AXE_CORE_CDN)
+                    axe = page.evaluate("async () => await axe.run()")
+                    for v in axe.get("violations", []):
+                        results["accessibility_issues"].append({"impact":v.get("impact"),"description":v.get("description"),"help":v.get("help"),"nodes":len(v.get("nodes",[]))})
+                except Exception as e: results["errors"].append(f"Accessibility scan failed: {e}")
             except Exception as e:
                 results["errors"].append(f"Failed to load page: {e}")
             browser.close()
-        if html:
-            results["broken_links"] = _check_links(html, url, check_external_links)
+        if html: results["broken_links"] = _check_links(html, url, check_external_links)
         return results
     except Exception as e:
         out = _basic_scan(url, check_external_links, timeout_ms)
@@ -136,4 +126,4 @@ def run_scan(target, max_pages=10, test_mobile=True, include_accessibility=True,
         except Exception: pass
         if progress_callback: progress_callback(len(visited),max_pages,current,len(bugs),len(queue))
     for i,b in enumerate(bugs,1): b["id"] = f"BUG-{i:03d}"
-    return {"target":target,"pages":pages,"bugs":bugs,"passed":max(0,len(pages)-len(bugs)}
+    return {"target":target,"pages":pages,"bugs":bugs,"passed":max(0,len(pages)-len(bugs))}
