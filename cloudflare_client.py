@@ -18,7 +18,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import requests
 
 WORKER_URL = os.environ.get("CLOUDFLARE_WORKER_URL", "").rstrip("/")
 
@@ -100,7 +99,7 @@ def run_scan_cloudflare(
             "testMobile": test_mobile,
             "includeAccessibility": include_accessibility,
         },
-        timeout=timeout,
+        timeout=timeout, allowed_origin=WORKER_URL,
     )
     resp.raise_for_status()
     return _normalize(resp.json())
@@ -129,7 +128,7 @@ def run_scan_cloudflare_async(
             "testMobile": test_mobile,
             "includeAccessibility": include_accessibility,
         },
-        timeout=30,
+        timeout=30, allowed_origin=WORKER_URL,
     )
     submit.raise_for_status()
     job_id = submit.json()["id"]
