@@ -24,5 +24,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install Worker dependencies
+        run: npm install
+      - name: Type-check Worker bundle
+        run: npm run typecheck
       - name: Run Worker network-policy tests
-        run: npx --yes tsx --test tests/network_policy.test.ts
+        run: npm run test:worker
