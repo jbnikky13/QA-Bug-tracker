@@ -20,6 +20,7 @@ class ScannerBoundaryTests(unittest.TestCase):
                 raise UnsafeTarget("blocked")
             return url
         with patch("scanner.validate_url", side_effect=validate), patch("scanner.safe_request") as request:
+            request.return_value.status_code = 200
             _check_links(html, "https://example.com", check_external=True)
             requested = [call.args[0] for call in request.call_args_list]
             self.assertNotIn("http://127.0.0.1/admin", requested)
