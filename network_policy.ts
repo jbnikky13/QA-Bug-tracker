@@ -76,7 +76,7 @@ export async function validateDestination(input: string): Promise<URL> {
     const query = new URL(DOH);
     query.searchParams.set("name", host);
     query.searchParams.set("type", type);
-    const response = await fetch(query.toString(), { headers: { accept: "application/dns-json" }, redirect: "error" });
+    const response = await fetch(query.toString(), { headers: { accept: "application/dns-json" }, redirect: "error", signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new UnsafeDestination("DNS safety lookup failed.");
     const body = await response.json() as { Answer?: Array<{ type: number; data: string }> };
     return (body.Answer ?? []).filter((a) => (type === "A" ? a.type === 1 : a.type === 28)).map((a) => a.data);
@@ -97,6 +97,7 @@ export async function safeFetch(input: string, init: RequestInit = {}, scopeOrig
     const response = await fetch(current.toString(), { ...init, redirect: "manual" });
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get("Location");
+    await response.body?.cancel();
     if (!location) throw new UnsafeDestination("Redirect missing Location header.");
     if (hop === 5) throw new UnsafeDestination("Redirect limit exceeded.");
     current = await validateDestination(new URL(location, current).toString());
