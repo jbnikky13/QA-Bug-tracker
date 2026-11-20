@@ -7,13 +7,20 @@ from pathlib import Path
 from security_boundary import safe_request
 
 WORKER_URL = os.environ.get("CLOUDFLARE_WORKER_URL", "").rstrip("/")
+WORKER_TOKEN = os.environ.get("CLOUDFLARE_WORKER_TOKEN", "")
+
+
+def _worker_headers() -> dict[str, str]:
+    if not WORKER_TOKEN:
+        raise RuntimeError("CLOUDFLARE_WORKER_TOKEN is not set; configure it as a server-side secret.")
+    return {"Authorization": f"Bearer {WORKER_TOKEN}"}
 
 
 def _download_screenshot(screenshot_url: str, dest_dir: Path) -> str | None:
     if not screenshot_url:
         return None
     try:
-        resp = safe_request(screenshot_url, timeout=15, allowed_origin=WORKER_URL)
+        resp = safe_request(screenshot_url, timeout=15, allowed_origin=WORKER_URL, headers=_worker_headers())
         resp.raise_for_status()
         fname = screenshot_url.rstrip("/").split("/")[-1] or f"shot_{int(time.time()*1000)}.png"
         if not fname.endswith(".png"):
@@ -73,7 +80,7 @@ def run_scan_cloudflare(
             "testMobile": test_mobile,
             "includeAccessibility": include_accessibility,
         },
-        timeout=timeout, allowed_origin=WORKER_URL,
+        timeout=timeout, allowed_origin=WORKER_URL, headers=_worker_headers(),
     )
     try:
         resp.raise_for_status()
@@ -101,7 +108,7 @@ def run_scan_cloudflare_async(
             "testMobile": test_mobile,
             "includeAccessibility": include_accessibility,
         },
-        timeout=30, allowed_origin=WORKER_URL,
+        timeout=30, allowed_origin=WORKER_URL, headers=_worker_headers(),
     )
     try:
         submit.raise_for_status()
