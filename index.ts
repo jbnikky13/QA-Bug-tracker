@@ -140,6 +140,8 @@ export default {
       let body: ScanRequest;
       try { body = await request.json() as ScanRequest; } catch { return json({ error: "invalid JSON" }, 400); }
       if (!body.url || typeof body.url !== "string") return json({ error: "url is required" }, 400);
+      if (body.url.length > 2048) return json({ error: "URL too long" }, 400);
+      if (body.maxPages !== undefined && (!Number.isInteger(body.maxPages) || body.maxPages < 1 || body.maxPages > 50)) return json({ error: "maxPages must be an integer from 1 to 50" }, 400);
       const active = await env.DB.prepare("SELECT COUNT(*) AS n FROM scans WHERE status IN ('queued','running')").first<{n:number}>();
       if ((active?.n ?? 0) >= 5) return json({ error: "scan capacity reached" }, 429);
 
@@ -224,7 +226,7 @@ export default {
     if (shotMatch && request.method === "GET") {
       const obj = await env.SCREENSHOTS.get(decodeURIComponent(shotMatch[1]));
       if (!obj) return new Response("Not found", { status: 404 });
-      return new Response(obj.body, { headers: { "Content-Type": "image/png", ...CORS } });
+      return new Response(obj.body, { headers: { "Content-Type": "image/png", "Cache-Control": "private, no-store", ...corsHeaders(request, env) } });
     }
 
     return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "Content-Type": "application/json", ...corsHeaders(request, env) } });
