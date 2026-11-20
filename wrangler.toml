@@ -1,7 +1,8 @@
 name = "qa-bug-tracker-worker"
 main = "index.ts"
-compatibility_date = "2026-08-20"
+compatibility_date = "2026-11-19"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
 [browser]
 binding = "MYBROWSER"
@@ -9,7 +10,7 @@ binding = "MYBROWSER"
 [[d1_databases]]
 binding = "DB"
 database_name = "qa-bug-tracker"
-database_id = "<YOUR-D1-DATABASE-ID>"
+database_id = "8615931c-0249-4600-a59f-0e0363876ed2"
 
 [[r2_buckets]]
 binding = "SCREENSHOTS"
@@ -23,3 +24,4 @@ queue = "qa-scan-jobs"
 queue = "qa-scan-jobs"
 max_batch_size = 1
 max_batch_timeout = 5
+max_retries = 3
