@@ -93,10 +93,14 @@ def safe_request(
     stream: bool = False,
     headers: dict | None = None,
     json_body: dict | list | None = None,
+    allowed_origin: str | None = None,
 ) -> requests.Response:
     """Perform a request with redirects disabled and each hop revalidated."""
     client = session or requests.Session()
     current = validate_url(url)
+    expected_origin = allowed_origin.rstrip("/") if allowed_origin else None
+    if expected_origin and current.split("/", 3)[:3] != expected_origin.split("/", 3)[:3]:
+        raise UnsafeTarget("Request URL is outside the allowed origin.")
     request_headers = {"User-Agent": USER_AGENT}
     if headers:
         request_headers.update(headers)
@@ -115,6 +119,8 @@ def safe_request(
         if hop >= max_redirects:
             raise UnsafeTarget("Maximum redirect count exceeded.")
         current = validate_url(urljoin(current, location))
+        if expected_origin and current.split("/", 3)[:3] != expected_origin.split("/", 3)[:3]:
+            raise UnsafeTarget("Redirect destination is outside the allowed origin.")
         if response.status_code == 303 or (response.status_code in (301, 302) and method.upper() not in ("GET", "HEAD")):
             method = "GET"
     raise UnsafeTarget("Maximum redirect count exceeded.")
