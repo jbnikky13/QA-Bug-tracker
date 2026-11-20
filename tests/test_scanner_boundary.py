@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from scanner import scan_url, run_scan, _check_links
 from security_boundary import UnsafeTarget
 
@@ -14,7 +15,11 @@ class ScannerBoundaryTests(unittest.TestCase):
 
     def test_link_checker_skips_private_destinations(self):
         html = '<a href="http://127.0.0.1/admin">admin</a><a href="https://example.com/path">public</a>'
-        with unittest.mock.patch("scanner.safe_request") as request:
+        def validate(url):
+            if "127.0.0.1" in url:
+                raise UnsafeTarget("blocked")
+            return url
+        with patch("scanner.validate_url", side_effect=validate), patch("scanner.safe_request") as request:
             _check_links(html, "https://example.com", check_external=True)
             requested = [call.args[0] for call in request.call_args_list]
             self.assertNotIn("http://127.0.0.1/admin", requested)
