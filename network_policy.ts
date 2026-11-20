@@ -94,7 +94,7 @@ export async function safeFetch(input: string, init: RequestInit = {}, scopeOrig
   const origin = scopeOrigin ?? current.origin;
   for (let hop = 0; hop <= 5; hop++) {
     if (current.origin !== origin) throw new UnsafeDestination("Cross-origin redirect is outside the scan scope.");
-    const response = await fetch(current.toString(), { ...init, redirect: "manual" });
+    const response = await fetch(current.toString(), { ...init, redirect: "manual", signal: init.signal ?? AbortSignal.timeout(15000) });
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get("Location");
     await response.body?.cancel();
