@@ -173,6 +173,8 @@ export default {
       let body: ScanRequest;
       try { body = await request.json() as ScanRequest; } catch { return json({ error: "invalid JSON" }, 400); }
       if (!body.url || typeof body.url !== "string") return json({ error: "url is required" }, 400);
+      if (body.url.length > 2048) return json({ error: "URL too long" }, 400);
+      if (body.maxPages !== undefined && (!Number.isInteger(body.maxPages) || body.maxPages < 1 || body.maxPages > 50)) return json({ error: "maxPages must be an integer from 1 to 50" }, 400);
       const active = await env.DB.prepare("SELECT COUNT(*) AS n FROM scans WHERE status IN ('queued','running')").first<{n:number}>();
       if ((active?.n ?? 0) >= 5) return json({ error: "scan capacity reached" }, 429);
 
