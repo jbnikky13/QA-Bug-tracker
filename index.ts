@@ -6,6 +6,8 @@ export interface Env {
   DB: D1Database;
   SCREENSHOTS: R2Bucket;
   SCAN_QUEUE: Queue;
+  WORKER_API_TOKEN: string;
+  ALLOWED_ORIGINS?: string;
 }
 
 interface ScanRequest {
@@ -15,17 +17,54 @@ interface ScanRequest {
   includeAccessibility?: boolean;
 }
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
+const CORS_METHODS = "GET, POST, OPTIONS";
+const CORS_HEADERS = "Authorization, Content-Type";
+
+function corsHeaders(request: Request, env: Env): Record<string, string> {
+  const origin = request.headers.get("Origin") ?? "";
+  const allowed = (env.ALLOWED_ORIGINS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Methods": CORS_METHODS,
+    "Access-Control-Allow-Headers": CORS_HEADERS,
+    "Vary": "Origin",
+  };
+  if (origin && allowed.includes(origin)) headers["Access-Control-Allow-Origin"] = origin;
+  return headers;
+}
+
+async function authorized(request: Request, env: Env): Promise<boolean> {
+  const supplied = request.headers.get("Authorization") ?? "";
+  const expected = env.WORKER_API_TOKEN ?? "";
+  if (!expected || !supplied.startsWith("Bearer ")) return false;
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(supplied.slice(7))),
+    crypto.subtle.digest("SHA-256", enc.encode(expected)),
+  ]);
+  const aa = new Uint8Array(a), bb = new Uint8Array(b);
+  let diff = 0;
+  for (let i = 0; i < aa.length; i++) diff |= aa[i] ^ bb[i];
+  return diff === 0;
+}
+
+async function rateAllowed(request: Request, env: Env): Promise<boolean> {
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip));
+  const key = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const row = await env.DB.prepare(`
+    INSERT INTO worker_rate_limits (ip_hash, window_start, request_count)
+    VALUES (?, CAST(strftime('%s','now') AS INTEGER) / 60, 1)
+    ON CONFLICT(ip_hash) DO UPDATE SET
+      request_count = CASE WHEN worker_rate_limits.window_start = excluded.window_start
+        THEN worker_rate_limits.request_count + 1 ELSE 1 END,
+      window_start = excluded.window_start
+    RETURNING request_count
+  `).bind(key).first<{request_count:number}>();
+  return (row?.request_count ?? 999) <= 30;
+}
 
 function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json", ...CORS },
-  });
+  return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
 }
 
 async function uploadScreenshots(env: Env, scanId: string, result: ScanResult): Promise<Record<string, string>> {
@@ -88,12 +127,21 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
+    if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders(request, env) });
+    if (!await authorized(request, env)) return json({ error: "unauthorized" }, 401);
+    if (!await rateAllowed(request, env)) return json({ error: "rate limit exceeded" }, 429);
+    if (request.method === "POST") {
+      const length = Number(request.headers.get("Content-Length") ?? "0");
+      if (length > 16_384) return json({ error: "request body too large" }, 413);
+    }
 
     // --- Synchronous scan: good for small/medium sites, one HTTP round trip ---
     if (url.pathname === "/scan" && request.method === "POST") {
-      const body = (await request.json()) as ScanRequest;
-      if (!body.url) return json({ error: "url is required" }, 400);
+      let body: ScanRequest;
+      try { body = await request.json() as ScanRequest; } catch { return json({ error: "invalid JSON" }, 400); }
+      if (!body.url || typeof body.url !== "string") return json({ error: "url is required" }, 400);
+      const active = await env.DB.prepare("SELECT COUNT(*) AS n FROM scans WHERE status IN ('queued','running')").first<{n:number}>();
+      if ((active?.n ?? 0) >= 5) return json({ error: "scan capacity reached" }, 429);
 
       const scanId = crypto.randomUUID();
       const opts = {
@@ -120,8 +168,11 @@ export default {
 
     // --- Async scan: for larger crawls, returns immediately with a job id ---
     if (url.pathname === "/scan/async" && request.method === "POST") {
-      const body = (await request.json()) as ScanRequest;
-      if (!body.url) return json({ error: "url is required" }, 400);
+      let body: ScanRequest;
+      try { body = await request.json() as ScanRequest; } catch { return json({ error: "invalid JSON" }, 400); }
+      if (!body.url || typeof body.url !== "string") return json({ error: "url is required" }, 400);
+      const active = await env.DB.prepare("SELECT COUNT(*) AS n FROM scans WHERE status IN ('queued','running')").first<{n:number}>();
+      if ((active?.n ?? 0) >= 5) return json({ error: "scan capacity reached" }, 429);
 
       const scanId = crypto.randomUUID();
       const opts = {
@@ -176,7 +227,7 @@ export default {
       return new Response(obj.body, { headers: { "Content-Type": "image/png", ...CORS } });
     }
 
-    return json({ error: "not found" }, 404);
+    return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "Content-Type": "application/json", ...corsHeaders(request, env) } });
   },
 
   // --- Queue consumer: does the actual crawl for async jobs ---
