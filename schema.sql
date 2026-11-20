@@ -45,3 +45,11 @@ CREATE TABLE IF NOT EXISTS bugs (
 CREATE INDEX IF NOT EXISTS idx_bugs_scan_id ON bugs(scan_id);
 CREATE INDEX IF NOT EXISTS idx_pages_scan_id ON pages(scan_id);
 CREATE INDEX IF NOT EXISTS idx_scans_status ON scans(status);
+
+
+-- Worker API rate-limit buckets. IPs are stored only as SHA-256 hashes.
+CREATE TABLE IF NOT EXISTS worker_rate_limits (
+    ip_hash TEXT PRIMARY KEY,
+    window_start INTEGER NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0
+);
