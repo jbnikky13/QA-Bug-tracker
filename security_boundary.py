@@ -76,7 +76,7 @@ def validate_url(url: str, *, resolve_dns: bool = True) -> str:
         if any(not _public_ip(address) for address in addresses):
             raise UnsafeTarget("Hostname resolves to a non-public address.")
     # Normalize scheme/host while preserving path, query, and fragment.
-    netloc = host
+    netloc = f"[{host}]" if ":" in host else host
     if port is not None:
         netloc = f"{host}:{port}"
     return urlunsplit((scheme, netloc, parts.path or "/", parts.query, parts.fragment))
@@ -91,6 +91,7 @@ def safe_request(
     max_redirects: int = MAX_REDIRECTS,
     stream: bool = False,
     headers: dict | None = None,
+    json_body: dict | list | None = None,
 ) -> requests.Response:
     """Perform a request with redirects disabled and each hop revalidated."""
     client = session or requests.Session()
@@ -101,7 +102,7 @@ def safe_request(
     for hop in range(max_redirects + 1):
         response = client.request(
             method, current, headers=request_headers, timeout=timeout,
-            allow_redirects=False, stream=stream,
+            allow_redirects=False, stream=stream, json=json_body,
         )
         if response.status_code not in REDIRECT_CODES:
             response.url = current
