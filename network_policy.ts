@@ -49,8 +49,8 @@ function isPublicIPv6(address: string): boolean {
   // Block unspecified, loopback, IPv4-mapped, ULA, link-local, multicast,
   // documentation, and non-global ranges; permit only global unicast 2000::/3.
   if ((first & 0xe000) !== 0x2000) return false;
-  if (groups[0] === "2001" && groups[1] === "0") return false; // Teredo
-  if (groups[0] === "2001" && groups[1] === "0db8") return false; // documentation
+  if (groups[0] === "2001" && ["0000", "0002", "0010", "0db8"].includes(groups[1])) return false; // special-use ranges
+  if (groups[0] === "2002") return false; // 6to4 transition addresses
   return true;
 }
 
