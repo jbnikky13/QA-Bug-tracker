@@ -48,7 +48,7 @@ class BoundaryTests(unittest.TestCase):
         session = Mock()
         response = Mock(status_code=200, headers={}, url="")
         session.request.return_value = response
-        safe_request("http://8.8.8.8", session=session, resolve_dns=False)
+        safe_request("http://8.8.8.8", session=session)
         self.assertFalse(session.request.call_args.kwargs["allow_redirects"])
 
     def test_redirect_to_private_destination_is_blocked(self):
@@ -56,7 +56,7 @@ class BoundaryTests(unittest.TestCase):
         first = Mock(status_code=302, headers={"Location": "http://127.0.0.1/"})
         session.request.return_value = first
         with self.assertRaises(UnsafeTarget):
-            safe_request("http://8.8.8.8", session=session, resolve_dns=False)
+            safe_request("http://8.8.8.8", session=session)
         self.assertEqual(session.request.call_count, 1)
 
 
