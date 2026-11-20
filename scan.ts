@@ -1,3 +1,4 @@
+import { safeFetch, validateDestination } from "./network_policy";
 export interface Bug {
   id: string;
   title: string;
@@ -68,8 +69,10 @@ function extractLinks(html: string, base: string): string[] {
 }
 
 export async function runScan(_browser: any, target: string, opts: { maxPages?: number; testMobile?: boolean; includeAccessibility?: boolean }): Promise<ScanResult> {
+  const validatedTarget = await validateDestination(target);
   const maxPages = Math.max(1, Math.min(opts.maxPages ?? 10, 50));
-  const queue = [target];
+  const queue = [validatedTarget.toString()];
+  const scanOrigin = validatedTarget.origin;
   const visited = new Set<string>();
   const pages: ScanPage[] = [];
   const bugs: Bug[] = [];
