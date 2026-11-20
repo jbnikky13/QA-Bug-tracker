@@ -51,6 +51,20 @@ class BoundaryTests(unittest.TestCase):
         safe_request("http://8.8.8.8", session=session)
         self.assertFalse(session.request.call_args.kwargs["allow_redirects"])
 
+    def test_request_rejects_wrong_allowed_origin(self):
+        session = Mock()
+        with self.assertRaises(UnsafeTarget):
+            safe_request("http://8.8.8.8", session=session, allowed_origin="https://worker.example")
+        self.assertEqual(session.request.call_count, 0)
+
+    def test_redirect_to_other_origin_is_blocked(self):
+        session = Mock()
+        first = Mock(status_code=302, headers={"Location": "http://9.9.9.9/"})
+        session.request.return_value = first
+        with self.assertRaises(UnsafeTarget):
+            safe_request("http://8.8.8.8", session=session, allowed_origin="http://8.8.8.8")
+        self.assertEqual(session.request.call_count, 1)
+
     def test_redirect_to_private_destination_is_blocked(self):
         session = Mock()
         first = Mock(status_code=302, headers={"Location": "http://127.0.0.1/"})
