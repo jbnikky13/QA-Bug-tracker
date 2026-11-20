@@ -6,14 +6,25 @@ from pathlib import Path
 
 from security_boundary import safe_request
 
-WORKER_URL = os.environ.get("CLOUDFLARE_WORKER_URL", "").rstrip("/")
-WORKER_TOKEN = os.environ.get("CLOUDFLARE_WORKER_TOKEN", "")
+def _setting(name: str) -> str:
+    value = os.environ.get(name, "")
+    if value:
+        return value
+    try:
+        import streamlit as st
+        return str(st.secrets.get(name, ""))
+    except Exception:
+        return ""
+
+
+WORKER_URL = _setting("CLOUDFLARE_WORKER_URL").rstrip("/")
 
 
 def _worker_headers() -> dict[str, str]:
-    if not WORKER_TOKEN:
+    token = _setting("CLOUDFLARE_WORKER_TOKEN")
+    if not token:
         raise RuntimeError("CLOUDFLARE_WORKER_TOKEN is not set; configure it as a server-side secret.")
-    return {"Authorization": f"Bearer {WORKER_TOKEN}"}
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _download_screenshot(screenshot_url: str, dest_dir: Path) -> str | None:
