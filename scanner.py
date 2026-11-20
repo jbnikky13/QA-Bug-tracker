@@ -38,7 +38,9 @@ def _check_links(html, base_url, check_external=True):
                 r.close()
                 r = safe_request(link, method="GET", timeout=8, stream=True)
             if r.status_code >= 400:
-                return {"url": link, "status": r.status_code, "error": None, "text": text}
+                status = r.status_code
+                r.close()
+                return {"url": link, "status": status, "error": None, "text": text}
             r.close()
         except (requests.RequestException, UnsafeTarget) as e:
             return {"url": link, "status": None, "error": str(e), "text": text}
