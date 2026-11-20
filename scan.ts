@@ -79,7 +79,7 @@ export async function runScan(_browser: any, target: string, opts: { maxPages?: 
     if (visited.has(url)) continue;
     visited.add(url);
     try {
-      const response = await fetch(url, { headers: { "User-Agent": "QA-Bug-Tracker-Worker/1.0" } });
+      const response = await safeFetch(url, { headers: { "User-Agent": "QA-Bug-Tracker-Worker/1.0" } }, scanOrigin);
       const html = await response.text();
       pages.push({ url, status: response.status });
       if (response.status >= 400) bugs.push(bug(bugs.length + 1, url, "HTTP error", `Page returned HTTP ${response.status}`, "High"));
