@@ -63,6 +63,34 @@ async function rateAllowed(request: Request, env: Env): Promise<boolean> {
   return (row?.request_count ?? 999) <= 30;
 }
 
+
+async function readScanRequest(request: Request): Promise<ScanRequest> {
+  const declared = Number(request.headers.get("Content-Length") ?? "0");
+  if (declared > 16_384) throw new Error("request body too large");
+  if (!request.body) throw new Error("empty request body");
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > 16_384) {
+        await reader.cancel();
+        throw new Error("request body too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return JSON.parse(new TextDecoder().decode(bytes)) as ScanRequest;
+}
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
 }
@@ -138,7 +166,8 @@ export default {
     // --- Synchronous scan: good for small/medium sites, one HTTP round trip ---
     if (url.pathname === "/scan" && request.method === "POST") {
       let body: ScanRequest;
-      try { body = await request.json() as ScanRequest; } catch { return json({ error: "invalid JSON" }, 400); }
+      try { body = await readScanRequest(request); }
+      catch (e) { return json({ error: String(e).includes("too large") ? "request body too large" : "invalid JSON" }, String(e).includes("too large") ? 413 : 400); }
       if (!body.url || typeof body.url !== "string") return json({ error: "url is required" }, 400);
       if (body.url.length > 2048) return json({ error: "URL too long" }, 400);
       if (body.maxPages !== undefined && (!Number.isInteger(body.maxPages) || body.maxPages < 1 || body.maxPages > 50)) return json({ error: "maxPages must be an integer from 1 to 50" }, 400);
