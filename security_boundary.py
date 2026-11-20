@@ -76,9 +76,10 @@ def validate_url(url: str, *, resolve_dns: bool = True) -> str:
         if any(not _public_ip(address) for address in addresses):
             raise UnsafeTarget("Hostname resolves to a non-public address.")
     # Normalize scheme/host while preserving path, query, and fragment.
-    netloc = f"[{host}]" if ":" in host else host
+    host_display = f"[{host}]" if ":" in host else host
+    netloc = host_display
     if port is not None:
-        netloc = f"{host}:{port}"
+        netloc = f"{host_display}:{port}"
     return urlunsplit((scheme, netloc, parts.path or "/", parts.query, parts.fragment))
 
 
