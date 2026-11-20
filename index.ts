@@ -107,8 +107,8 @@ async function uploadScreenshots(env: Env, scanId: string, result: ScanResult): 
   return keyByUrl;
 }
 
-async function persistScan(env: Env, scanId: string, result: ScanResult, status = "complete", error: string | null = null) {
-  const keyByUrl = await uploadScreenshots(env, scanId, result);
+async function persistScan(env: Env, scanId: string, result: ScanResult, status = "complete", error: string | null = null, uploadedKeys?: Record<string, string>) {
+  const keyByUrl = uploadedKeys ?? await uploadScreenshots(env, scanId, result);
 
   await env.DB.batch([
     env.DB.prepare(
@@ -188,7 +188,7 @@ export default {
       try {
         const result = await runScan(env.MYBROWSER, body.url, opts);
         const keyByUrl = await uploadScreenshots(env, scanId, result);
-        await persistScan(env, scanId, result);
+        await persistScan(env, scanId, result, "complete", null, keyByUrl);
         return json(resultToJson(scanId, result, keyByUrl, url.origin));
       } catch (e) {
         await env.DB.prepare(`UPDATE scans SET status='failed', error=?, updated_at=datetime('now') WHERE id=?`)
@@ -200,7 +200,8 @@ export default {
     // --- Async scan: for larger crawls, returns immediately with a job id ---
     if (url.pathname === "/scan/async" && request.method === "POST") {
       let body: ScanRequest;
-      try { body = await request.json() as ScanRequest; } catch { return json({ error: "invalid JSON" }, 400); }
+      try { body = await readScanRequest(request); }
+      catch (e) { return json({ error: String(e).includes("too large") ? "request body too large" : "invalid JSON" }, String(e).includes("too large") ? 413 : 400); }
       if (!body.url || typeof body.url !== "string") return json({ error: "url is required" }, 400);
       if (body.url.length > 2048) return json({ error: "URL too long" }, 400);
       if (body.maxPages !== undefined && (!Number.isInteger(body.maxPages) || body.maxPages < 1 || body.maxPages > 50)) return json({ error: "maxPages must be an integer from 1 to 50" }, 400);
@@ -272,8 +273,10 @@ export default {
         const result = await runScan(env.MYBROWSER, target, opts);
         await persistScan(env, scanId, result, "complete");
       } catch (e) {
-        await env.DB.prepare(`UPDATE scans SET status='failed', error=?, updated_at=datetime('now') WHERE id=?`)
+        await env.DB.prepare(`UPDATE scans SET status='queued', error=?, updated_at=datetime('now') WHERE id=?`)
           .bind(String(e), scanId).run();
+        msg.retry({ delaySeconds: 30 });
+        continue;
       }
       msg.ack();
     }
