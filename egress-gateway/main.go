@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -40,6 +39,7 @@ func publicIP(ip net.IP) bool {
 		if a == 192 && v4[1] == 168 { return false }
 		if a == 100 && v4[1] >= 64 && v4[1] <= 127 { return false }
 		if a == 192 && v4[1] == 0 && (v4[2] == 0 || v4[2] == 2) { return false }
+		if a == 192 && v4[1] == 88 && v4[2] == 99 { return false }
 		if a == 198 && (v4[1] == 18 || v4[1] == 19 || (v4[1] == 51 && v4[2] == 100)) { return false }
 		if a == 203 && v4[1] == 0 && (v4[2] == 113 || v4[2] == 0) { return false }
 		return true
@@ -81,14 +81,12 @@ func (g *gateway) resolvePublic(ctx context.Context, host string) (net.IP, error
 	return chosen, nil
 }
 
-func (g *gateway) clientFor(host string, ip net.IP) *http.Client {
+func (g *gateway) clientFor(host, port string, ip net.IP) *http.Client {
 	if g.clientFactory != nil { return g.clientFactory(host, ip) }
 	dialer := &net.Dialer{Timeout: 8*time.Second, KeepAlive: -1}
 	transport := &http.Transport{
 		Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12},
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			port := "80"; if strings.Contains(network, "tcp") { port = "80" }
-			if strings.HasSuffix(host, ":443") { port = "443" }
 			return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 		},
 	}
@@ -103,7 +101,7 @@ func (g *gateway) clientFor(host string, ip net.IP) *http.Client {
 func (g *gateway) fetchTarget(ctx context.Context, raw string) (*http.Response, []byte, error) {
 	u, err := validateURL(raw); if err != nil { return nil, nil, err }
 	ip, err := g.resolvePublic(ctx, u.Hostname()); if err != nil { return nil, nil, err }
-	client := g.clientFor(u.Hostname(), ip)
+	port := u.Port(); if port == "" { if u.Scheme == "https" { port = "443" } else { port = "80" } }; client := g.clientFor(u.Hostname(), port, ip)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil); if err != nil { return nil,nil,err }
 	req.Header.Set("User-Agent", "QA-Bug-Tracker-Egress/1.0")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
@@ -141,4 +139,3 @@ func main() {
 	log.Fatal(server.ListenAndServe())
 }
 
-var _ = fmt.Sprintf
