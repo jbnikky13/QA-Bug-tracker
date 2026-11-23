@@ -25,3 +25,28 @@ queue = "qa-scan-jobs"
 max_batch_size = 1
 max_batch_timeout = 5
 max_retries = 3
+
+# Fully isolated staging resources. Secrets are configured separately with Wrangler.
+[env.staging]
+name = "qa-bug-tracker-worker-staging"
+workers_dev = true
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "qa-bug-tracker-staging"
+database_id = "6f1b979d-ab29-42ce-bf42-a04949e3054f"
+
+[[env.staging.r2_buckets]]
+binding = "SCREENSHOTS"
+bucket_name = "qa-bug-tracker-staging-screenshots"
+
+[[env.staging.queues.producers]]
+binding = "SCAN_QUEUE"
+queue = "qa-scan-jobs-staging"
+
+[[env.staging.queues.consumers]]
+queue = "qa-scan-jobs-staging"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "qa-scan-jobs-staging-dlq"
