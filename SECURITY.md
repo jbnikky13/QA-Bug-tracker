@@ -30,7 +30,7 @@ Tests cover URL scheme and credential rejection, unsafe IPs, local hostnames, DN
 
 ## Worker API controls added on the security branch
 
-- All API routes, including scan submission, scan polling, and screenshot retrieval, require `Authorization: Bearer <token>`.
+- Scan submission, polling, and screenshot retrieval require `Authorization: Bearer <token>`. CORS preflight (`OPTIONS`) is intentionally unauthenticated.
 - The Worker secret is named `WORKER_API_TOKEN`; it must be set with Wrangler and must never be committed.
 - The Streamlit/server environment must contain `CLOUDFLARE_WORKER_TOKEN` with the same value. Do not put this token in browser-side JavaScript or public repository files.
 - D1-backed per-IP rate limiting allows at most 30 requests per minute.
@@ -48,7 +48,7 @@ Tests cover URL scheme and credential rejection, unsafe IPs, local hostnames, DN
    `wrangler secret put WORKER_API_TOKEN`
 4. Set the same value as the server-side Streamlit secret/environment variable `CLOUDFLARE_WORKER_TOKEN`.
 5. If browser origins are required, set `ALLOWED_ORIGINS` to an explicit comma-separated allowlist. Never use `*`.
-6. Verify authenticated scan, unauthenticated rejection, rate limiting, scan capacity, polling and screenshot access in the deployed staging Worker before production use.
+6. Verify authenticated scan, unauthenticated rejection, rate limiting, scan capacity, authenticated polling and screenshot access in the deployed staging Worker before production use.\n\n### Async queue failure behavior\n\nThe queue consumer retries transient failures with backoff. With `max_retries = 3`, it marks the scan `failed` and acknowledges the message on the fourth failed delivery, preventing permanently queued records. Queue submission failures also mark the created scan as failed. This behavior is covered by Worker tests. Configure a Cloudflare dead-letter queue as an additional operational safeguard if the queue configuration is changed to allow messages to exhaust outside the consumer handler.
 
 ## Connection-level SSRF limitation — not yet solved
 
