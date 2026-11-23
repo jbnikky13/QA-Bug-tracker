@@ -55,3 +55,35 @@ Tests cover URL scheme and credential rejection, unsafe IPs, local hostnames, DN
 The Worker runtime's standard `fetch()` API resolves a hostname independently of the preceding DNS-over-HTTPS validation. This code cannot pin the actual connection to the validated IP. A hostile DNS answer can therefore change between validation and connection. A real connection-level guarantee requires routing outbound target traffic through a separately controlled egress proxy/gateway that resolves once, rejects non-public destinations, pins the chosen IP for the connection while preserving TLS hostname verification, and repeats validation on every redirect. The proxy itself must be the only permitted outbound path from the scanner runtime.
 
 No such egress proxy or Cloudflare network policy is provisioned by this repository change. Until that infrastructure exists and is penetration-tested, SSRF protection remains defense-in-depth rather than complete. Do not deploy this branch as a claim of complete SSRF elimination.
+
+
+## Dedicated pinned-IP egress gateway
+
+The Go service under `egress-gateway/` is a separate outbound fetch service. It:
+- accepts authenticated POST requests only;
+- permits HTTP and HTTPS on their matching standard ports;
+- resolves a hostname once per origin request and rejects the entire answer set if any address is non-public;
+- dials the selected numeric IP directly, rather than asking the HTTP transport to resolve the hostname again;
+- retains the original hostname for TLS certificate verification and SNI;
+- disables environment proxy inheritance and connection reuse;
+- limits redirects to five and keeps redirects on the original origin;
+- limits target response bodies to 2 MiB.
+
+Build and test it independently:
+
+```sh
+cd egress-gateway
+gofmt -w main.go main_test.go
+go test -race -count=1 ./...
+go vet ./...
+go build -trimpath ./...
+docker build -t qa-bug-tracker-egress:staging .
+```
+
+Deploy the container behind a trusted HTTPS ingress on a dedicated service. Set `EGRESS_GATEWAY_TOKEN` to a random secret of at least 32 characters. Do not expose the gateway without TLS and authentication. The Worker must use `EGRESS_GATEWAY_URL` and `EGRESS_GATEWAY_TOKEN` as staging-only bindings/secrets. The gateway must not share credentials or network access with production.
+
+The gateway's IP-pinned dialer is unit tested, but the service has not yet been deployed to an external container host or subjected to live DNS-rebinding, redirect, TLS, and network-egress penetration tests. It is not yet a proven production-grade boundary.
+
+## Isolated staging resources
+
+Staging uses its own Worker name, D1 database, R2 bucket, scan queue and dead-letter queue. The D1 schema is initialized independently. Never point staging bindings at production resource IDs. Configure Worker secrets with the staging environment only; do not store secret values in `wrangler.toml` or Git.
