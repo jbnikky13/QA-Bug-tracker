@@ -69,6 +69,7 @@ def _normalize(raw: dict) -> dict:
         "pages": pages,
         "bugs": bugs,
         "passed": raw.get("passed", 0),
+        "total_checks": raw.get("total_checks", 0),
     }
 
 
@@ -129,7 +130,7 @@ def run_scan_cloudflare_async(
 
     waited = 0.0
     while waited < max_wait:
-        poll = safe_request(f"{WORKER_URL}/scan/{job_id}", timeout=30, allowed_origin=WORKER_URL)
+        poll = safe_request(f"{WORKER_URL}/scan/{job_id}", timeout=30, allowed_origin=WORKER_URL, headers=_worker_headers())
         try:
             poll.raise_for_status()
             data = poll.json()
