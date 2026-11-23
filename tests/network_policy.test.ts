@@ -19,8 +19,15 @@ test("rejects non-standard ports and local hostnames", async () => {
   await assert.rejects(() => validateDestination("http://service.internal"), UnsafeDestination);
 });
 
-test("permits public IP literal targets", async () => {
+test("permits public IP literal targets including IPv6", async () => {
   assert.equal((await validateDestination("https://8.8.8.8")).hostname, "8.8.8.8");
+  assert.equal((await validateDestination("https://[2606:4700:4700::1111]")).hostname, "[2606:4700:4700::1111]");
+});
+
+test("blocks IPv6 documentation, transition and mapped addresses", async () => {
+  for (const host of ["[2001:db8::1]", "[2002::1]", "[::ffff:127.0.0.1]"]) {
+    await assert.rejects(() => validateDestination(`https://${host}`), UnsafeDestination, host);
+  }
 });
 
 test("safeFetch blocks a redirect to a private destination", async () => {
