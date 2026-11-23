@@ -76,7 +76,7 @@ async function uploadScreenshots(env: Env, scanId: string, result: ScanResult): 
 async function persistScan(env: Env, scanId: string, result: ScanResult, status = "complete", error: string | null = null, uploadedKeys?: Record<string, string>) {
   const keyByUrl = uploadedKeys ?? await uploadScreenshots(env, scanId, result);
   await env.DB.batch([
-    env.DB.prepare("UPDATE scans SET status=?, pages_tested=?, passed_checks=?, error=?, updated_at=datetime('now') WHERE id=?").bind(status, result.pages.length, result.passed, error, scanId),
+    env.DB.prepare("UPDATE scans SET status=?, pages_tested=?, passed_checks=?, total_checks=?, error=?, updated_at=datetime('now') WHERE id=?").bind(status, result.pages.length, result.passed, result.totalChecks, error, scanId),
     ...result.pages.map((p) => env.DB.prepare("INSERT INTO pages (scan_id, url, status, screenshot_key) VALUES (?, ?, ?, ?)").bind(scanId, p.url, p.status, keyByUrl[p.url] ?? null)),
     ...result.bugs.map((b: Bug) => env.DB.prepare(`INSERT INTO bugs (id, scan_id, title, severity, priority, type, page, message, evidence, wcag, selector, html_snippet, remediation, steps, expected, actual, help_url, screenshot_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
       b.id, scanId, b.title, b.severity, b.priority, b.type, b.page, b.message, b.evidence, b.wcag, b.selector, b.html_snippet, b.remediation, b.steps, b.expected, b.actual, b.help_url, keyByUrl[b.page] ?? null
@@ -139,7 +139,7 @@ export default {
       if (scan.status !== "complete") return json({ id: scanId, status: scan.status, error: scan.error ?? null }, 200, cors);
       const pages = await env.DB.prepare("SELECT * FROM pages WHERE scan_id = ?").bind(scanId).all();
       const bugs = await env.DB.prepare("SELECT * FROM bugs WHERE scan_id = ?").bind(scanId).all();
-      return json({ id: scanId, target: scan.target, status: scan.status, passed: scan.passed_checks,
+      return json({ id: scanId, target: scan.target, status: scan.status, passed: scan.passed_checks, total_checks: scan.total_checks,
         pages: pages.results.map((p: any) => ({ url: p.url, status: p.status, screenshot_url: p.screenshot_key ? `${url.origin}/screenshot/${p.screenshot_key}` : null })),
         bugs: bugs.results.map((b: any) => ({ ...b, screenshot_url: b.screenshot_key ? `${url.origin}/screenshot/${b.screenshot_key}` : null })) }, 200, cors);
     }
