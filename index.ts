@@ -1,5 +1,6 @@
 import type { BrowserWorker } from "@cloudflare/playwright";
-import { runScan, type ScanResult, type Bug } from "./scan";
+import { runScan, type ScanResult, type Bug, type ScanFetcher } from "./scan";
+import { validateDestination } from "./network_policy";
 
 export interface Env {
   MYBROWSER: BrowserWorker;
@@ -8,6 +9,8 @@ export interface Env {
   SCAN_QUEUE: Queue;
   WORKER_API_TOKEN: string;
   ALLOWED_ORIGINS?: string;
+  EGRESS_GATEWAY_URL: string;
+  EGRESS_GATEWAY_TOKEN: string;
 }
 interface ScanRequest { url: string; maxPages?: number; testMobile?: boolean; includeAccessibility?: boolean; }
 const CORS_METHODS = "GET, POST, OPTIONS";
@@ -60,6 +63,28 @@ async function readScanRequest(request: Request): Promise<ScanRequest> {
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   return JSON.parse(new TextDecoder().decode(bytes)) as ScanRequest;
 }
+function makeGatewayFetch(env: Env): ScanFetcher {
+  return async (input, _init, scopeOrigin) => {
+    const target = await validateDestination(input);
+    if (scopeOrigin && target.origin !== scopeOrigin) throw new Error("Cross-origin scan destination blocked.");
+    if (!env.EGRESS_GATEWAY_URL || !env.EGRESS_GATEWAY_TOKEN) throw new Error("Egress gateway is not configured.");
+    const gateway = new URL(env.EGRESS_GATEWAY_URL);
+    if (gateway.protocol !== "https:" || gateway.username || gateway.password) throw new Error("Egress gateway must be a trusted HTTPS endpoint.");
+    const response = await fetch(new URL("/fetch", gateway).toString(), {
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(25000),
+      headers: { "Authorization": "Bearer " + env.EGRESS_GATEWAY_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ url: target.toString() }),
+    });
+    if (!response.ok) throw new Error("Egress gateway request failed.");
+    const payload = await response.json() as { status: number; headers: Record<string,string>; body: string };
+    if (!Number.isInteger(payload.status) || typeof payload.body !== "string" || !payload.headers) throw new Error("Invalid egress gateway response.");
+    const binary = atob(payload.body);
+    if (binary.length > 2 * 1024 * 1024) throw new Error("Egress response exceeds scan limit.");
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Response(bytes, { status: payload.status, headers: payload.headers });
+  };
+}
 function json(data: unknown, status = 200, headers: Record<string,string> = {}): Response {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", ...headers } });
 }
@@ -107,7 +132,7 @@ export default {
       const scanId = crypto.randomUUID(), opts = { maxPages: body.maxPages ?? 10, testMobile: body.testMobile ?? true, includeAccessibility: body.includeAccessibility ?? true };
       await env.DB.prepare("INSERT INTO scans (id, target, status, max_pages, test_mobile, include_accessibility) VALUES (?, ?, 'running', ?, ?, ?)").bind(scanId, body.url, opts.maxPages, opts.testMobile ? 1 : 0, opts.includeAccessibility ? 1 : 0).run();
       try {
-        const result = await runScan(env.MYBROWSER, body.url, opts), keys = await uploadScreenshots(env, scanId, result);
+        const result = await runScan(env.MYBROWSER, body.url, opts, makeGatewayFetch(env)), keys = await uploadScreenshots(env, scanId, result);
         await persistScan(env, scanId, result, "complete", null, keys);
         return json(resultToJson(scanId, result, keys, url.origin), 200, cors);
       } catch (e) {
@@ -159,7 +184,7 @@ export default {
       const { scanId, url: target, opts } = msg.body;
       await env.DB.prepare("UPDATE scans SET status='running', error=NULL, updated_at=datetime('now') WHERE id=?").bind(scanId).run();
       try {
-        const result = await runScan(env.MYBROWSER, target, opts);
+        const result = await runScan(env.MYBROWSER, target, opts, makeGatewayFetch(env));
         await persistScan(env, scanId, result, "complete");
         msg.ack();
       } catch (e) {
