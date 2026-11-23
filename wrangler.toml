@@ -31,6 +31,9 @@ max_retries = 3
 name = "qa-bug-tracker-worker-staging"
 workers_dev = true
 
+[env.staging.browser]
+binding = "MYBROWSER"
+
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "qa-bug-tracker-staging"
