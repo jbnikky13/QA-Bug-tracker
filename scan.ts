@@ -65,10 +65,13 @@ function extractLinks(html: string, base: string): string[] {
   }
   return [...new Set(links)];
 }
+export type ScanFetcher = (input: string, init?: RequestInit, scopeOrigin?: string) => Promise<Response>;
+
 export async function runScan(
   _browser: unknown,
   target: string,
   opts: { maxPages?: number; testMobile?: boolean; includeAccessibility?: boolean },
+  fetcher: ScanFetcher = safeFetch,
 ): Promise<ScanResult> {
   const validatedTarget = await validateDestination(target);
   const requestedPages = opts.maxPages ?? 10;
@@ -89,7 +92,7 @@ export async function runScan(
     if (visited.has(current)) continue;
     visited.add(current);
     try {
-      const response = await safeFetch(current, { headers: { "User-Agent": "QA-Bug-Tracker-Worker/1.0" } }, scanOrigin);
+      const response = await fetcher(current, { headers: { "User-Agent": "QA-Bug-Tracker-Worker/1.0" } }, scanOrigin);
       try {
         const html = await readHtmlLimited(response);
         pages.push({ url: current, status: response.status });
