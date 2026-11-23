@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test:worker": "tsx --test tests/network_policy.test.ts",
+    "test:worker": "tsx --test tests/*.test.ts",
     "deploy:staging": "wrangler deploy"
   },
   "devDependencies": {
