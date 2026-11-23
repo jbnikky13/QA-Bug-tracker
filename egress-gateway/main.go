@@ -60,6 +60,7 @@ func validateURL(raw string) (*url.URL, error) {
 	u, err := url.ParseRequestURI(raw)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil { return nil, errors.New("invalid or prohibited URL") }
 	if u.Port() != "" && u.Port() != "80" && u.Port() != "443" { return nil, errors.New("non-standard port blocked") }
+	if (u.Scheme == "https" && u.Port() == "80") || (u.Scheme == "http" && u.Port() == "443") { return nil, errors.New("scheme and port mismatch") }
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") { return nil, errors.New("local hostname blocked") }
 	if ip := net.ParseIP(host); ip != nil && !publicIP(ip) { return nil, errors.New("non-public IP blocked") }
