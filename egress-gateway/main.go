@@ -81,9 +81,14 @@ func (g *gateway) resolvePublic(ctx context.Context, host string) (net.IP, error
 	return chosen, nil
 }
 
+func dialPinned(ctx context.Context, network string, ip net.IP, port string) (net.Conn, error) {
+	if ip == nil || port == "" { return nil, errors.New("missing pinned destination") }
+	dialer := &net.Dialer{Timeout: 8*time.Second, KeepAlive: -1}
+	return dialPinned(ctx, network, ip, port)
+}
+
 func (g *gateway) clientFor(host, port string, ip net.IP) *http.Client {
 	if g.clientFactory != nil { return g.clientFactory(host, ip) }
-	dialer := &net.Dialer{Timeout: 8*time.Second, KeepAlive: -1}
 	transport := &http.Transport{
 		Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12},
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
