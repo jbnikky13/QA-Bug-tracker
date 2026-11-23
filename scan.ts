@@ -7,7 +7,7 @@ export interface Bug {
   actual: string; help_url: string; screenshotBytes?: Uint8Array;
 }
 export interface ScanPage { url: string; status: number; screenshotBytes?: Uint8Array; }
-export interface ScanResult { target: string; pages: ScanPage[]; bugs: Bug[]; passed: number; }
+export interface ScanResult { target: string; pages: ScanPage[]; bugs: Bug[]; passed: number; totalChecks: number; }
 
 function bug(id: number, page: string, type: string, message: string, severity = "Medium"): Bug {
   return {
@@ -21,7 +21,6 @@ function bug(id: number, page: string, type: string, message: string, severity =
     help_url: "https://www.w3.org/WAI/standards-guidelines/wcag/",
   };
 }
-
 async function readHtmlLimited(response: Response, maxBytes = 2 * 1024 * 1024): Promise<string> {
   const type = response.headers.get("Content-Type") ?? "";
   if (type && !/^(text\/html|application\/xhtml\+xml)(;|$)/i.test(type)) {
@@ -54,7 +53,6 @@ async function readHtmlLimited(response: Response, maxBytes = 2 * 1024 * 1024): 
   for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
   return new TextDecoder("utf-8", { fatal: false }).decode(merged);
 }
-
 function extractLinks(html: string, base: string): string[] {
   const links: string[] = [];
   const re = /<a\b[^>]*href=["']([^"']+)["']/gi;
@@ -67,7 +65,6 @@ function extractLinks(html: string, base: string): string[] {
   }
   return [...new Set(links)];
 }
-
 export async function runScan(
   _browser: unknown,
   target: string,
@@ -84,6 +81,8 @@ export async function runScan(
   const visited = new Set<string>();
   const pages: ScanPage[] = [];
   const bugs: Bug[] = [];
+  let passed = 0;
+  let totalChecks = 0;
 
   while (queue.length && visited.size < maxPages) {
     const current = queue.shift()!;
@@ -94,10 +93,16 @@ export async function runScan(
       try {
         const html = await readHtmlLimited(response);
         pages.push({ url: current, status: response.status });
-        if (response.status >= 400) bugs.push(bug(bugs.length + 1, current, "HTTP error", `Page returned HTTP ${response.status}`, "High"));
+        totalChecks++;
+        if (response.status < 400) passed++;
+        else bugs.push(bug(bugs.length + 1, current, "HTTP error", `Page returned HTTP ${response.status}`, "High"));
         if (opts.includeAccessibility !== false) {
-          if (!/<title\b[^>]*>[^<]+<\/title>/i.test(html)) bugs.push(bug(bugs.length + 1, current, "Accessibility", "Page has no descriptive document title."));
-          if (/<img\b(?![^>]*\balt=)[^>]*>/i.test(html)) bugs.push(bug(bugs.length + 1, current, "Accessibility", "One or more images are missing alt text."));
+          totalChecks++;
+          if (/<title\b[^>]*>[^<]+<\/title>/i.test(html)) passed++;
+          else bugs.push(bug(bugs.length + 1, current, "Accessibility", "Page has no descriptive document title."));
+          totalChecks++;
+          if (!/<img\b(?![^>]*\balt=)[^>]*>/i.test(html)) passed++;
+          else bugs.push(bug(bugs.length + 1, current, "Accessibility", "One or more images are missing alt text."));
         }
         for (const link of extractLinks(html, current)) {
           if (!visited.has(link) && !queue.includes(link) && queue.length + visited.size < maxPages) queue.push(link);
@@ -105,8 +110,9 @@ export async function runScan(
       } finally { /* readHtmlLimited consumes or cancels the response body */ }
     } catch (e) {
       pages.push({ url: current, status: 0 });
+      totalChecks++;
       bugs.push(bug(bugs.length + 1, current, "Page load", `Failed to load page: ${String(e)}`, "High"));
     }
   }
-  return { target: validatedTarget.toString(), pages, bugs, passed: Math.max(0, pages.length - bugs.length) };
+  return { target: validatedTarget.toString(), pages, bugs, passed, totalChecks };
 }
