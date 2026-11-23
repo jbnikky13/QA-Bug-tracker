@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS scans (
     include_accessibility INTEGER NOT NULL DEFAULT 1,
     pages_tested INTEGER NOT NULL DEFAULT 0,
     passed_checks INTEGER NOT NULL DEFAULT 0,
+    total_checks INTEGER NOT NULL DEFAULT 0,
     error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
